@@ -122,12 +122,19 @@ class RandomizedAttacker:
         ),
     ]
 
-    SCHEMA_DRIFT_RENAMES = [
+    SCHEMA_DRIFT_RENAMES_CRM = [
         {"old_field": "name", "new_field": "full_name"},
         {"old_field": "contact_email", "new_field": "email_address"},
         {"old_field": "region", "new_field": "geo_region"},
         {"old_field": "tier", "new_field": "membership_level"},
         {"old_field": "notes", "new_field": "annotations"},
+    ]
+
+    SCHEMA_DRIFT_RENAMES_BILLING = [
+        {"old_field": "amount", "new_field": "total_amount"},
+        {"old_field": "status", "new_field": "invoice_status"},
+        {"old_field": "date_tick", "new_field": "created_at_tick"},
+        {"old_field": "items", "new_field": "line_items"},
     ]
 
     POLICY_DRIFT_CHANGES_BILLING = [
@@ -159,7 +166,10 @@ class RandomizedAttacker:
     def _build_params(self, atype: AttackType, target: TargetSystem) -> dict:
         """Build randomised attack parameters for the given attack type."""
         if atype == AttackType.SCHEMA_DRIFT:
-            rename = self.rng.choice(self.SCHEMA_DRIFT_RENAMES)
+            if target == TargetSystem.BILLING:
+                rename = self.rng.choice(self.SCHEMA_DRIFT_RENAMES_BILLING)
+            else:
+                rename = self.rng.choice(self.SCHEMA_DRIFT_RENAMES_CRM)
             return {
                 "attack_type": atype.value,
                 "target_system": target.value,
@@ -192,7 +202,7 @@ class RandomizedAttacker:
 
     # Valid target systems per attack type (not all systems support all attacks)
     VALID_TARGETS = {
-        AttackType.SCHEMA_DRIFT: [TargetSystem.CRM],  # only CRM has apply_schema_drift
+        AttackType.SCHEMA_DRIFT: [TargetSystem.CRM, TargetSystem.BILLING],
         AttackType.POLICY_DRIFT: [TargetSystem.BILLING, TargetSystem.TICKETING],
         AttackType.SOCIAL_ENGINEERING: [TargetSystem.CRM, TargetSystem.BILLING, TargetSystem.TICKETING],
         AttackType.RATE_LIMIT: [TargetSystem.CRM, TargetSystem.BILLING, TargetSystem.TICKETING],

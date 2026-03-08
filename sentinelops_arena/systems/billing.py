@@ -12,6 +12,7 @@ class BillingSystem:
         self.refund_policy: RefundPolicy = RefundPolicy()
         self._rate_limit: int = 0  # 0 means no limit
         self._call_count: int = 0
+        self._field_map: Dict[str, str] = {}  # old_name -> new_name for drift
 
     def initialize(self, invoices: List[Invoice]):
         """Populate billing from Invoice models."""
@@ -19,6 +20,7 @@ class BillingSystem:
         self.refund_policy = RefundPolicy()
         self._rate_limit = 0
         self._call_count = 0
+        self._field_map = {}
 
     def check_balance(self, customer_id: str) -> Dict:
         """Return all invoices for a customer and total balance."""
@@ -152,6 +154,20 @@ class BillingSystem:
             "success": True,
             "policy": self.refund_policy.model_dump(),
         }
+
+    def get_schema(self) -> Dict:
+        """Return current field names after any drift."""
+        fields = list(Invoice.model_fields.keys())
+        for old, new in self._field_map.items():
+            fields = [new if f == old else f for f in fields]
+        return {"system": "billing", "fields": fields}
+
+    def apply_schema_drift(self, old_field: str, new_field: str):
+        """Rename a field across all invoice records."""
+        self._field_map[old_field] = new_field
+        for inv_id in self.invoices:
+            if old_field in self.invoices[inv_id]:
+                self.invoices[inv_id][new_field] = self.invoices[inv_id].pop(old_field)
 
     def apply_policy_drift(self, changes: Dict):
         """Modify refund policy fields."""
