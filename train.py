@@ -23,9 +23,11 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import random
+import re
 
 # Pre-start vLLM standby for faster inference (official pattern)
 os.environ["UNSLOTH_VLLM_STANDBY"] = "1"
@@ -706,9 +708,7 @@ def make_action_correctness_reward(agent_role: str):
                             score += 1.5
                         # Strategic timing bonus
                         prompt_text = str(kwargs.get("prompts", [""])[0] if kwargs.get("prompts") else "")
-                        tick_match = None
-                        import re as _re
-                        tick_match = _re.search(r"Tick (\d+)/", prompt_text)
+                        tick_match = re.search(r"Tick (\d+)/", prompt_text)
                         current_tick = int(tick_match.group(1)) if tick_match else 15
                         if at_type == "schema_drift" and current_tick < 10:
                             score += 0.3  # early schema drift is strategic
@@ -717,7 +717,7 @@ def make_action_correctness_reward(agent_role: str):
                     elif at == "pass":
                         # Diminishing returns for pass — late-game pass is OK, early pass wastes opportunity
                         prompt_text = str(kwargs.get("prompts", [""])[0] if kwargs.get("prompts") else "")
-                        tick_match = _re.search(r"Ticks remaining: (\d+)", prompt_text)
+                        tick_match = re.search(r"Ticks remaining: (\d+)", prompt_text)
                         remaining = int(tick_match.group(1)) if tick_match else 15
                         if remaining > 20:
                             score += 0.0  # no reward for early passing
@@ -777,9 +777,8 @@ def make_environment_reward(agent_role: str):
 
             try:
                 # Use prompt hash as seed for environment diversity
-                import hashlib as _hashlib
                 prompt_data = str(kwargs.get("prompts", [""])[0] if kwargs.get("prompts") else "")
-                base_seed = int(_hashlib.md5(prompt_data.encode()).hexdigest()[:8], 16)
+                base_seed = int(hashlib.md5(prompt_data.encode()).hexdigest()[:8], 16)
                 env_reward = _execute_action_in_env(action, agent_role, seed=base_seed + i)
                 scores.append(env_reward * 1.5)  # Scale env reward for impact
             except Exception:
