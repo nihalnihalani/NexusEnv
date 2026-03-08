@@ -431,6 +431,31 @@ def run_episode(
     return replay_log, final_scores
 
 
+def run_demo_episode(
+    trained: bool = False,
+    seed: int = 42,
+    attacker_type: str = "randomized",
+) -> Dict:
+    """Run a single demo episode and return a dict with ``scores`` and ``trajectory``.
+
+    This is a convenience wrapper around :func:`run_episode` that returns a
+    dictionary instead of a tuple so callers can use ``r["scores"]`` and
+    ``r["trajectory"]`` directly.
+
+    Args:
+        trained: Whether the worker agent uses trained (resilient) behaviour.
+        seed: Random seed for the environment and the randomised attacker.
+        attacker_type: ``"randomized"`` (default) or ``"scripted"`` (legacy).
+
+    Returns:
+        dict with keys:
+          - ``"scores"``    – final per-agent score dict
+          - ``"trajectory"`` – list of step dicts (the replay log)
+    """
+    trajectory, scores = run_episode(trained=trained, seed=seed, attacker_type=attacker_type)
+    return {"scores": scores, "trajectory": trajectory}
+
+
 def run_comparison(seed: int = 42, attacker_type: str = "randomized") -> Dict:
     """Run untrained vs trained worker comparison.
 
