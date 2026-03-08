@@ -11,13 +11,23 @@ Run in Google Colab with GPU runtime:
 
 Usage:
     python train.py
-    python train.py --model_name unsloth/Qwen2.5-0.5B-Instruct --use_unsloth
-    python train.py --model_name unsloth/Llama-3.2-1B-Instruct --use_unsloth
+    python train.py --model_name unsloth/Qwen2.5-1B-Instruct --use_unsloth
 """
 
 import argparse
 import json
+import logging
+import os
 import random
+import warnings
+
+import torch
+
+# Import unsloth first so GRPO/cache setup runs before TRL
+try:
+    import unsloth  # noqa: F401
+except ImportError:
+    unsloth = None
 
 from sentinelops_arena.environment import SentinelOpsArena
 from sentinelops_arena.models import AgentRole, SentinelAction
@@ -94,6 +104,44 @@ def parse_worker_action(text: str) -> SentinelAction:
         action_type="respond",
         response_text="Unable to process request.",
     )
+
+
+def _patch_unsloth_grpo_cache_mask_alignment():
+    """Align sequence lengths in Unsloth GRPO cache to fix 'tensor a (N) must match tensor b (M)'.
+    Unsloth regenerates the cache on version changes; this re-applies the fix so it survives."""
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(root, "unsloth_compiled_cache", "UnslothGRPOTrainer.py")
+        if not os.path.isfile(path):
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        if "seq_len = min(x.size(1), completion_mask.size(1))" in text:
+            return
+        old_m = "mean_kl_per_reward = (x * mask).sum(1) / n_mask_per_reward"
+        new_m = (
+            "seq_len = min(x.size(1), mask.size(1))\n"
+            "                x_slice = x[:, :seq_len]\n"
+            "                mask_slice = mask[:, :seq_len]\n"
+            "                n_slice = mask_slice.sum(1).clamp(min=1.0)\n"
+            "                mean_kl_per_reward = (x_slice * mask_slice).sum(1) / n_slice"
+        )
+        if old_m in text:
+            text = text.replace(old_m, new_m, 2)
+        old_c = "return (x * completion_mask).sum() / completion_token_count"
+        new_c = (
+            "seq_len = min(x.size(1), completion_mask.size(1))\n"
+            "                x_slice = x[:, :seq_len]\n"
+            "                completion_mask_slice = completion_mask[:, :seq_len]\n"
+            "                cnt = completion_mask_slice.sum().clamp(min=1.0)\n"
+            "                return (x_slice * completion_mask_slice).sum() / cnt"
+        )
+        if old_c in text:
+            text = text.replace(old_c, new_c)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except Exception:
+        pass
 
 
 # -------------------------------------------------------------------
@@ -207,12 +255,12 @@ def main():
     )
     parser.add_argument(
         "--model_name", type=str,
-        default="Qwen/Qwen2.5-0.5B-Instruct",
-        help="Base model (default: Qwen2.5-0.5B-Instruct)",
+        default="unsloth/Qwen2.5-3B-Instruct",
+        help="Base model (e.g. unsloth/Qwen2.5-3B-Instruct). Gated models need HF_TOKEN.",
     )
     parser.add_argument(
-        "--use_unsloth", action="store_true",
-        help="Use Unsloth for 2x faster training",
+        "--use_unsloth", action="store_true", default=True,
+        help="Use Unsloth (LoRA); no quantization by default",
     )
     parser.add_argument(
         "--num_epochs", type=int, default=1,
@@ -227,6 +275,15 @@ def main():
         help="Output directory for trained model",
     )
     args = parser.parse_args()
+
+    # Transformers calls logger.warning_once(msg, FutureWarning); logging treats 2nd arg as % format
+    _orig = logging.Logger.warning_once
+    def _patched_warning_once(self, *a, **kw):
+        if len(a) == 2 and isinstance(a[1], type) and issubclass(a[1], Warning):
+            warnings.warn(a[0], category=a[1], stacklevel=2)
+            return
+        return _orig(self, *a, **kw)
+    logging.Logger.warning_once = _patched_warning_once
 
     print("=" * 60)
     print("SentinelOps Arena — Worker Agent GRPO Training")
@@ -259,35 +316,29 @@ def main():
         steps += 1
     print(f"  Full episode: {steps} steps, scores: {env.scores}")
 
-    # --- Step 2: Collect training data ---
-    print(f"\n[2/4] Collecting data from {args.num_episodes} episodes...")
-    dataset_raw = build_training_dataset(num_episodes=args.num_episodes)
-    print(f"  Collected {len(dataset_raw)} worker turns")
-    print(f"  Avg reward: {sum(d['reward'] for d in dataset_raw) / len(dataset_raw):.3f}")
+    # --- Step 2: Training prompts (minimal list, no heavy transforms)
+    print(f"\n[2/4] Building prompts from {args.num_episodes} episodes...")
+    raw = build_training_dataset(num_episodes=args.num_episodes)
+    prompt_list = [
+        [{"role": "system", "content": WORKER_SYSTEM_PROMPT}, {"role": "user", "content": d["prompt"]}]
+        for d in raw
+    ]
+    print(f"  Prompts: {len(prompt_list)}, avg reward: {sum(d['reward'] for d in raw) / len(raw):.3f}")
 
-    # Format as HF Dataset
     from datasets import Dataset
-
-    prompts = []
-    for d in dataset_raw:
-        messages = [
-            {"role": "system", "content": WORKER_SYSTEM_PROMPT},
-            {"role": "user", "content": d["prompt"]},
-        ]
-        prompts.append(messages)
-
-    train_dataset = Dataset.from_dict({"prompt": prompts})
-    print(f"  Dataset: {len(train_dataset)} examples")
+    train_dataset = Dataset.from_dict({"prompt": prompt_list})
 
     # --- Step 3: Load model ---
     print(f"\n[3/4] Loading model: {args.model_name}...")
     if args.use_unsloth:
         from unsloth import FastLanguageModel
 
+        # Qwen with Unsloth, no quantization (full 16-bit)
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=args.model_name,
             max_seq_length=2048,
-            load_in_4bit=True,
+            dtype=None,
+            load_in_4bit=False,
         )
         model = FastLanguageModel.get_peft_model(
             model,
@@ -300,14 +351,28 @@ def main():
             lora_dropout=0,
             bias="none",
             use_gradient_checkpointing="unsloth",
+            random_state=3407,
         )
-        print("  Loaded with Unsloth (4-bit + LoRA)")
+        print("  Loaded with Unsloth (16-bit + LoRA)")
     else:
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
         tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-        model = AutoModelForCausalLM.from_pretrained(args.model_name)
-        print("  Loaded with transformers")
+        # 8-bit quantization so 8B model fits in 80GB VRAM with optimizer
+        quantization_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+            llm_int8_enable_fp32_cpu_offload=False,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            quantization_config=quantization_config,
+            device_map="auto",
+            low_cpu_mem_usage=True,
+        )
+        model.gradient_checkpointing_enable()
+        if not hasattr(model, "warnings_issued"):
+            model.warnings_issued = {}
+        print("  Loaded with transformers (8-bit + gradient checkpointing)")
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -315,7 +380,62 @@ def main():
     # --- Step 4: GRPO Training ---
     print(f"\n[4/4] Starting GRPO training...")
 
+    if args.use_unsloth:
+        _patch_unsloth_grpo_cache_mask_alignment()
+    from transformers import TrainerCallback
     from trl import GRPOConfig, GRPOTrainer
+
+    # Preferred metric keys (only these are shown; constants dropped after a few steps)
+    _USEFUL_KEYS = (
+        "loss", "grad_norm", "learning_rate", "reward", "kl", "completion_length",
+        "epoch", "rewards/reward_function/mean", "completions/mean_length",
+    )
+
+    class TableLoggingCallback(TrainerCallback):
+        """Print one header line then one row of numbers per log step; only useful, varying metrics."""
+
+        def __init__(self):
+            self._header_printed = False
+            self._column_order = None
+            self._seen = {}  # key -> set of string values (to drop constants)
+            self._frozen_columns = False  # once True, stop dropping columns
+            self._step = 0
+
+        def _fmt(self, v):
+            if isinstance(v, float):
+                return f"{v:.4g}"
+            return str(v)
+
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if not logs:
+                return
+            self._step += 1
+            # Restrict to useful keys that appear in logs
+            useful = [k for k in self._USEFUL_KEYS if k in logs]
+            if not useful:
+                return
+            # Track values to drop constant columns after a few steps
+            for k in useful:
+                self._seen.setdefault(k, set()).add(self._fmt(logs.get(k)))
+            # After 3 steps, keep only columns that have varied
+            if not self._frozen_columns and self._step >= 3 and self._column_order is not None:
+                varying = [k for k in self._column_order if len(self._seen.get(k, set())) > 1]
+                if varying:
+                    self._column_order = varying
+                self._frozen_columns = True
+            if self._column_order is None:
+                self._column_order = useful
+            col_w = 12
+            if not self._header_printed:
+                header = "  ".join(c[:col_w].rjust(col_w) for c in self._column_order)
+                print("\n" + header)
+                print("-" * len(header))
+                self._header_printed = True
+            row = [self._fmt(logs.get(k, ""))[:col_w].rjust(col_w) for k in self._column_order]
+            print("  ".join(row))
+
+        def on_train_end(self, args, state, control, **kwargs):
+            pass
 
     def reward_function(completions, **kwargs):
         """Reward based on action quality in the SentinelOps environment."""
@@ -352,7 +472,7 @@ def main():
     config = GRPOConfig(
         output_dir=args.output_dir,
         num_train_epochs=args.num_epochs,
-        per_device_train_batch_size=2,
+        per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
         num_generations=4,
         max_completion_length=256,
@@ -361,6 +481,10 @@ def main():
         logging_steps=1,
         save_steps=50,
         report_to="none",
+        bf16=args.use_unsloth,
+        fp16=False,
+        gradient_checkpointing=True,
+        use_vllm=False,  # set True and install vllm for faster generation (notebook uses True)
     )
 
     trainer = GRPOTrainer(
@@ -369,7 +493,14 @@ def main():
         reward_funcs=[reward_function],
         args=config,
         train_dataset=train_dataset,
+        callbacks=[TableLoggingCallback()],
     )
+
+    # Text-only models: set vision attrs so UnslothGRPOTrainer does not raise AttributeError
+    if args.use_unsloth:
+        for attr in ("image_token_id", "vision_start_token_id", "vision_end_token_id"):
+            if not hasattr(trainer, attr):
+                setattr(trainer, attr, None)
 
     trainer.train()
 

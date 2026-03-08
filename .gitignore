@@ -36,3 +36,15 @@ Thumbs.db
 
 # uv
 uv.lock
+
+# Unsloth / training temp and output
+unsloth_compiled_cache/
+sentinelops-worker-grpo/
+*.ckpt
+*.safetensors
+
+# Cursor / editor
+.cursor/
+*.tmp
+*.temp
+.cache/

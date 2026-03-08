@@ -1,0 +1,12 @@
+# Prefer latest Unsloth (2026.x); it pins trl/transformers to compatible versions.
+# Install order: unsloth first so pip keeps latest unsloth and installs its required trl/transformers.
+# (Listing transformers>=5 and trl>=0.29 first would downgrade unsloth to 2025.9.x.)
+
+unsloth
+unsloth_zoo
+
+# Unsloth will pull compatible transformers and trl (e.g. 5.x, 0.24+)
+torch>=2.0
+datasets>=2.0
+accelerate>=0.30
+peft>=0.13
