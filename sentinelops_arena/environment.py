@@ -291,6 +291,15 @@ class SentinelOpsArena(MCPEnvironment):
         **kwargs: Any,
     ) -> SentinelObservation:
         """Handle non-MCP actions (game logic / turn management)."""
+        if self.attack_manager is None:
+            return SentinelObservation(
+                current_agent=AgentRole.ATTACKER,
+                tick=0,
+                done=False,
+                reward=0.0,
+                last_action_result={"error": "Environment not reset. Call reset() first."},
+            )
+
         expected_agent = self.turn_order[self.current_agent_idx]
 
         # Validate agent turn
