@@ -1,9 +1,7 @@
 """Phase 1 verification tests for SentinelOps Arena.
 
 Run with:
-    cd /Users/nihalnihalani/Desktop/Github/NexusEnv && \
-    PYTHONPATH=hackathon_env/.venv/lib/python3.14/site-packages:. \
-    python3 sentinelops_arena/test_phase1.py
+    python sentinelops_arena/test_phase1.py
 """
 
 import sys
