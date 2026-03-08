@@ -385,21 +385,14 @@ def main():
     from transformers import TrainerCallback
     from trl import GRPOConfig, GRPOTrainer
 
-    # Preferred metric keys (only these are shown; constants dropped after a few steps)
-    _USEFUL_KEYS = (
-        "loss", "grad_norm", "learning_rate", "reward", "kl", "completion_length",
-        "epoch", "rewards/reward_function/mean", "completions/mean_length",
-    )
-
     class TableLoggingCallback(TrainerCallback):
-        """Print one header line then one row of numbers per log step; only useful, varying metrics."""
+        """Log one table row per completed epoch (epoch = integer 1, 2, 3...)."""
 
         def __init__(self):
             self._header_printed = False
             self._column_order = None
-            self._seen = {}  # key -> set of string values (to drop constants)
-            self._frozen_columns = False  # once True, stop dropping columns
-            self._step = 0
+            self._last_logs = None
+            self._last_epoch_int = -1
 
         def _fmt(self, v):
             if isinstance(v, float):
@@ -409,33 +402,42 @@ def main():
         def on_log(self, args, state, control, logs=None, **kwargs):
             if not logs:
                 return
-            self._step += 1
-            # Restrict to useful keys that appear in logs
-            useful = [k for k in self._USEFUL_KEYS if k in logs]
-            if not useful:
-                return
-            # Track values to drop constant columns after a few steps
-            for k in useful:
-                self._seen.setdefault(k, set()).add(self._fmt(logs.get(k)))
-            # After 3 steps, keep only columns that have varied
-            if not self._frozen_columns and self._step >= 3 and self._column_order is not None:
-                varying = [k for k in self._column_order if len(self._seen.get(k, set())) > 1]
-                if varying:
-                    self._column_order = varying
-                self._frozen_columns = True
+            current_epoch_int = int(state.epoch)
             if self._column_order is None:
-                self._column_order = useful
-            col_w = 12
-            if not self._header_printed:
-                header = "  ".join(c[:col_w].rjust(col_w) for c in self._column_order)
-                print("\n" + header)
-                print("-" * len(header))
-                self._header_printed = True
-            row = [self._fmt(logs.get(k, ""))[:col_w].rjust(col_w) for k in self._column_order]
-            print("  ".join(row))
+                # Epoch first, then rest sorted (drop raw 'epoch' float from columns)
+                self._column_order = ["epoch"] + sorted(
+                    k for k in logs.keys() if k != "epoch"
+                )
+            # When we cross into a new epoch, emit one row for the completed epoch
+            if current_epoch_int > self._last_epoch_int and self._last_logs is not None:
+                epoch_number = self._last_epoch_int + 1  # 1-based
+                row = [str(epoch_number)]
+                for k in self._column_order[1:]:
+                    row.append(self._fmt(self._last_logs.get(k, "")))
+                if not self._header_printed:
+                    col_w = 14
+                    header = "  ".join(c[:col_w].rjust(col_w) for c in self._column_order)
+                    print("\n" + header)
+                    print("-" * len(header))
+                    self._header_printed = True
+                col_w = 14
+                print("  ".join(self._fmt(v)[:col_w].rjust(col_w) for v in row))
+            self._last_epoch_int = current_epoch_int
+            self._last_logs = dict(logs)
 
         def on_train_end(self, args, state, control, **kwargs):
-            pass
+            # Emit final epoch row
+            if self._last_logs is None:
+                return
+            if self._column_order is None:
+                return
+            epoch_number = self._last_epoch_int + 1
+            row = [str(epoch_number)]
+            for k in self._column_order[1:]:
+                row.append(self._fmt(self._last_logs.get(k, "")))
+            col_w = 14
+            if self._header_printed:
+                print("  ".join(self._fmt(v)[:col_w].rjust(col_w) for v in row))
 
     def reward_function(completions, **kwargs):
         """Reward based on action quality in the SentinelOps environment."""
@@ -481,7 +483,7 @@ def main():
         logging_steps=1,
         save_steps=50,
         report_to="none",
-        bf16=args.use_unsloth,
+        bf16=False,
         fp16=False,
         gradient_checkpointing=True,
         use_vllm=False,  # set True and install vllm for faster generation (notebook uses True)
