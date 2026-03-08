@@ -488,16 +488,33 @@ def format_metrics_html(metrics: dict[str, Any]) -> str:
 
 def format_comparison_metrics_html(
     untrained_metrics: dict[str, Any],
-    trained_metrics: dict[str, Any],
+    trained_metrics: dict[str, Any] | None = None,
 ) -> str:
     """Render untrained vs. trained metrics side-by-side with diff indicators.
+
+    Accepts two calling conventions:
+
+    1. **Two metrics dicts** (original API)::
+
+           format_comparison_metrics_html(untrained_metrics, trained_metrics)
+
+    2. **Combined results dict** (output of ``run_comparison()``)::
+
+           format_comparison_metrics_html(run_comparison(seed=42))
+
+       The combined dict must have the shape
+       ``{"untrained": {"log": [...], ...}, "trained": {"log": [...], ...}}``.
+       Episode metrics are computed automatically from each log.
 
     Parameters
     ----------
     untrained_metrics : dict
-        Metrics from the untrained (baseline) episode.
-    trained_metrics : dict
-        Metrics from the trained episode.
+        Either a pre-computed metrics dict (original API) **or** the combined
+        comparison results dict returned by ``run_comparison()``.
+    trained_metrics : dict, optional
+        Pre-computed metrics for the trained episode.  Required when
+        ``untrained_metrics`` is a plain metrics dict.  Omit when passing the
+        combined results dict.
 
     Returns
     -------
@@ -505,6 +522,16 @@ def format_comparison_metrics_html(
         Self-contained HTML snippet showing both metric sets with arrows
         indicating improvement (green) or regression (red).
     """
+    # --- Handle combined results dict from run_comparison() ---
+    if trained_metrics is None:
+        combined = untrained_metrics
+        if "untrained" not in combined or "trained" not in combined:
+            raise ValueError(
+                "When called with a single argument, the dict must contain "
+                "'untrained' and 'trained' keys (output of run_comparison())."
+            )
+        untrained_metrics = compute_episode_metrics(combined["untrained"]["log"])
+        trained_metrics = compute_episode_metrics(combined["trained"]["log"])
 
     def _diff_indicator(
         before: float,
