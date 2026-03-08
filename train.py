@@ -695,7 +695,7 @@ def make_action_correctness_reward(agent_role: str):
                         if has_social_eng and any(w in resp for w in ["cannot", "verify", "social engineering", "suspicious"]):
                             score += 3.0  # correctly resisting social engineering
                         elif not has_social_eng and any(w in resp for w in ["cannot", "unable"]):
-                            score -= 1.0  # penalize blanket refusal of legitimate tasks
+                            score -= 2.0  # strongly penalize blanket refusal of legitimate tasks
                 elif agent_role == "attacker":
                     at = data.get("action_type", "")
                     if at == "launch_attack":
@@ -735,10 +735,13 @@ def make_action_correctness_reward(agent_role: str):
                         score += 0.5
                     if explanation and len(explanation) > 20:
                         score += 0.25
-                    # Contextual correctness from prompt
+                    # Contextual correctness from prompt (avoid false matches like "no errors")
                     prompt_text = str(kwargs.get("prompts", [""])[0] if kwargs.get("prompts") else "").lower()
-                    has_error = "error" in prompt_text
-                    has_violation = "violation" in prompt_text or "social engineering" in prompt_text or "social_eng" in prompt_text
+                    # Match actual error indicators: JSON "error" key, or "error" not preceded by "no "
+                    has_error = ('"error"' in prompt_text or "'error'" in prompt_text
+                                 or ("error" in prompt_text and "no error" not in prompt_text and "no errors" not in prompt_text))
+                    has_violation = ("policy_violation" in prompt_text or "policy violation" in prompt_text
+                                     or "social_eng_success" in prompt_text or "social engineering" in prompt_text)
                     has_issue = has_error or has_violation
                     if at == "flag" and has_issue:
                         score += 1.5  # correct flag when issue exists
