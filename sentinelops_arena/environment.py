@@ -516,10 +516,12 @@ class SentinelOpsArena(MCPEnvironment):
                 system = self._get_system(system_name)
                 if system:
                     data = system.get_schema()
+                    # Only set drift_detected=True when actual drift has occurred
+                    has_drift = bool(getattr(system, "_field_map", None))
                     result = {
                         "success": True,
                         "details": data,
-                        "drift_detected": True,
+                        "drift_detected": has_drift,
                     }
                 else:
                     result = {
@@ -549,7 +551,7 @@ class SentinelOpsArena(MCPEnvironment):
                     "details": {
                         "error": f"Unknown action: {action.action_type}"
                     },
-                    "graceful_error": True,
+                    "graceful_error": False,  # Unknown actions should NOT get +0.2 reward
                 }
 
         except KeyError as e:

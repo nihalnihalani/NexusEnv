@@ -1045,8 +1045,8 @@ def main():
         help="Max training steps (reference: 500)",
     )
     parser.add_argument(
-        "--num_episodes", type=int, default=20,
-        help="Number of episodes to collect for training data",
+        "--num_episodes", type=int, default=50,
+        help="Number of episodes to collect for training data (50+ recommended for diversity)",
     )
     parser.add_argument(
         "--output_dir", type=str, default="./sentinelops-grpo",
