@@ -663,7 +663,7 @@ def make_action_correctness_reward(agent_role: str):
             text = completion[0]["content"] if isinstance(completion, list) else str(completion)
             action = _parse_completion_to_action(text, agent_role)
             if action is None:
-                scores.append(0.0)
+                scores.append(-1.0)  # penalize unparseable output
                 continue
 
             score = 0.0
@@ -749,6 +749,8 @@ def make_action_correctness_reward(agent_role: str):
                         score += 1.0  # correct approve when no issue
                     elif at == "flag" and not has_issue:
                         score -= 0.5  # penalize false alarms
+                    elif at == "approve" and has_issue:
+                        score -= 1.5  # penalize missed violations
             except (json.JSONDecodeError, ValueError):
                 score = -1.5
 
@@ -1045,8 +1047,8 @@ def main():
         help="Max training steps (reference: 500)",
     )
     parser.add_argument(
-        "--num_episodes", type=int, default=20,
-        help="Number of episodes to collect for training data",
+        "--num_episodes", type=int, default=50,
+        help="Number of episodes to collect for training data (50+ recommended for diversity)",
     )
     parser.add_argument(
         "--output_dir", type=str, default="./sentinelops-grpo",

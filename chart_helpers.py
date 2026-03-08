@@ -9,6 +9,99 @@ from __future__ import annotations
 import pandas as pd
 
 
+# ---------------------------------------------------------------------------
+# Pre-computed interesting seeds (curated for demo variety)
+# ---------------------------------------------------------------------------
+
+INTERESTING_SEEDS: list[dict] = [
+    {"seed": 42, "label": "Seed 42 — Balanced attack mix"},
+    {"seed": 7, "label": "Seed 7 — Heavy schema drift"},
+    {"seed": 123, "label": "Seed 123 — Social engineering barrage"},
+    {"seed": 256, "label": "Seed 256 — Rate limit stress test"},
+    {"seed": 999, "label": "Seed 999 — Policy drift cascade"},
+    {"seed": 1337, "label": "Seed 1337 — Early aggression"},
+    {"seed": 2024, "label": "Seed 2024 — Late-game attacks"},
+    {"seed": 555, "label": "Seed 555 — Mixed multi-system"},
+]
+
+
+def build_reward_breakdown_df(log: list[dict]) -> pd.DataFrame:
+    """Build per-agent reward breakdown DataFrame.
+
+    Returns a DataFrame with columns: agent, reward_type, total
+    where reward_type is 'positive' or 'negative'.
+    """
+    agents = ["attacker", "worker", "oversight"]
+    rows: list[dict] = []
+
+    for agent in agents:
+        pos = sum(e.get("reward", 0) for e in log if e["agent"] == agent and (e.get("reward", 0) or 0) > 0)
+        neg = sum(e.get("reward", 0) for e in log if e["agent"] == agent and (e.get("reward", 0) or 0) < 0)
+        rows.append({"agent": agent, "reward_type": "positive", "total": round(pos, 2)})
+        rows.append({"agent": agent, "reward_type": "negative", "total": round(neg, 2)})
+
+    return pd.DataFrame(rows)
+
+
+def build_episode_summary_html(log: list[dict], scores: dict) -> str:
+    """Build a concise per-episode summary card."""
+    total_ticks = max((e["tick"] for e in log), default=0)
+    attacks = [e for e in log if e["action_type"] == "launch_attack"]
+    flags = [e for e in log if e["agent"] == "oversight" and e["action_type"] == "flag"]
+    worker_errors = [e for e in log if e["agent"] == "worker" and (e.get("reward", 0) or 0) < 0]
+
+    # Attack type breakdown
+    attack_types: dict[str, int] = {}
+    for a in attacks:
+        details = str(a.get("details", ""))
+        for atype in ["schema_drift", "policy_drift", "social_engineering", "rate_limit"]:
+            if atype in details:
+                attack_types[atype] = attack_types.get(atype, 0) + 1
+                break
+
+    # Winner determination
+    winner = max(scores, key=scores.get)
+    winner_colors = {"attacker": "var(--sentinel-red)", "worker": "var(--sentinel-blue)", "oversight": "var(--sentinel-green)"}
+
+    atk_breakdown = " | ".join(f"{k.replace('_', ' ').title()}: {v}" for k, v in attack_types.items()) or "None"
+
+    return f"""\
+<div style="font-family: 'IBM Plex Mono', monospace; padding: 16px;
+    background: var(--sentinel-surface); border: 1px solid var(--sentinel-border);
+    border-radius: 8px;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+    <div style="font-size: 14px; font-weight: bold; color: var(--sentinel-green);
+        text-transform: uppercase; letter-spacing: 1px;">Episode Summary</div>
+    <div style="font-size: 12px; color: #888;">Duration: {total_ticks} ticks</div>
+  </div>
+  <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px;">
+    <div style="text-align: center; padding: 8px; background: var(--sentinel-surface-alt);
+        border-radius: 6px; border: 1px solid var(--sentinel-border);">
+      <div style="font-size: 22px; font-weight: bold; color: var(--sentinel-red);">{len(attacks)}</div>
+      <div style="font-size: 10px; color: #888; text-transform: uppercase;">Attacks</div>
+    </div>
+    <div style="text-align: center; padding: 8px; background: var(--sentinel-surface-alt);
+        border-radius: 6px; border: 1px solid var(--sentinel-border);">
+      <div style="font-size: 22px; font-weight: bold; color: var(--sentinel-blue);">{len(worker_errors)}</div>
+      <div style="font-size: 10px; color: #888; text-transform: uppercase;">Worker Errors</div>
+    </div>
+    <div style="text-align: center; padding: 8px; background: var(--sentinel-surface-alt);
+        border-radius: 6px; border: 1px solid var(--sentinel-border);">
+      <div style="font-size: 22px; font-weight: bold; color: var(--sentinel-green);">{len(flags)}</div>
+      <div style="font-size: 10px; color: #888; text-transform: uppercase;">Flags Raised</div>
+    </div>
+    <div style="text-align: center; padding: 8px; background: var(--sentinel-surface-alt);
+        border-radius: 6px; border: 1px solid var(--sentinel-border);">
+      <div style="font-size: 22px; font-weight: bold; color: {winner_colors.get(winner, '#888')};">{winner.upper()}</div>
+      <div style="font-size: 10px; color: #888; text-transform: uppercase;">Winner</div>
+    </div>
+  </div>
+  <div style="font-size: 11px; color: #888; border-top: 1px solid var(--sentinel-border); padding-top: 8px;">
+    Attack breakdown: {atk_breakdown}
+  </div>
+</div>"""
+
+
 def format_comparison_scores_html(untrained: dict, trained: dict) -> str:
     """Format comparative scores for untrained vs trained."""
     colors = {
