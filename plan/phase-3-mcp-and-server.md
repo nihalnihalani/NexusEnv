@@ -1,8 +1,10 @@
-# Phase 3: MCP Tools + OpenEnv HTTP Server + MCP-X Gateway
+# Phase 3: MCP + OpenEnv HTTP Server
 
-**Time:** 1.5 hours (Hours 4-5.5)
-**Priority:** HIGH -- unlocks demo and satisfies Pipeline judging criterion (10%)
-**Depends on:** Phase 2 (working environment)
+**Time:** 0.5 hours (Hours 6-6.5)
+**Priority:** MEDIUM -- MCPEnvironment did most of the work in Phase 2
+**Depends on:** Phase 2 (working environment with MCP tools)
+
+**KEY CHANGE:** MCPEnvironment handles MCP tool routing automatically. Phase 3 is now just creating the HTTP server entry point and verifying everything works end-to-end. MCP-X gateway is CUT.
 
 ---
 
@@ -10,32 +12,32 @@
 
 | File | Purpose | Est. Time |
 |------|---------|-----------|
-| `sentinelops_arena/mcp_tools.py` | FastMCP tool definitions wrapping env operations | 30 min |
-| `sentinelops_arena/server.py` | `create_app()` HTTP server entry point | 15 min |
-| `mcp-x/config.toml` | MCP-X per-agent access control config | 10 min |
-| `mcp-x/mcp_x.py` | Copy from envbeats, no modifications needed | 5 min |
-| `run_server.py` | Script to start both env server + MCP-X | 10 min |
-| `tests/test_mcp.py` | MCP tool integration tests | 20 min |
+| `sentinelops_arena/server.py` | `create_app()` HTTP server entry point | 10 min |
+| Verify MCP tools via HTTP | End-to-end test | 10 min |
+| Verify WebSocket + MCP | Integration test | 10 min |
 
 ---
 
 ## Step-by-Step Build Instructions
 
-### Step 1: server.py -- OpenEnv HTTP Server (15 min)
+### Step 1: server.py -- OpenEnv HTTP Server (10 min)
 
-Follow the hackathon_env template exactly.
+This is trivial -- follow the hackathon_env template exactly.
 
 ```python
 # sentinelops_arena/server.py
 """
-FastAPI application for SentinelOps Arena.
+HTTP server for SentinelOps Arena.
 
 Endpoints:
     POST /reset  -- Reset environment
-    POST /step   -- Execute an action
+    POST /step   -- Execute an action (including ListToolsAction, CallToolAction)
     GET  /state  -- Get current state
     GET  /schema -- Get action/observation schemas
-    WS   /ws     -- WebSocket for persistent sessions
+    WS   /ws     -- WebSocket for persistent sessions (supports /mcp)
+
+The MCPEnvironment base class handles MCP tool routing automatically.
+Agents can discover tools via ListToolsAction and call them via CallToolAction.
 
 Usage:
     uvicorn sentinelops_arena.server:app --host 0.0.0.0 --port 8000
@@ -65,394 +67,120 @@ if __name__ == "__main__":
     main(port=args.port)
 ```
 
-### Step 2: mcp_tools.py -- FastMCP Tool Definitions (30 min)
+### Step 2: Verify HTTP + MCP Integration (10 min)
 
-Expose enterprise system APIs as individual MCP tools. This is what LLM agents actually call.
-
-```python
-# sentinelops_arena/mcp_tools.py
-"""
-MCP tool definitions for SentinelOps Arena.
-
-Exposes enterprise system APIs as MCP tools via FastMCP.
-Tools are grouped by agent role (attacker/worker/oversight).
-"""
-import json
-from fastmcp import FastMCP
-
-from .environment import SentinelOpsArena
-from .models import (
-    SentinelAction, AgentRole, AttackType, TargetSystem,
-    TicketPriority,
-)
-
-mcp = FastMCP("sentinelops", host="0.0.0.0", port=9500, stateless_http=True)
-
-# Global environment instance (shared across MCP calls)
-env = SentinelOpsArena()
-
-
-# ============ Environment Control Tools ============
-
-@mcp.tool()
-def reset(seed: int = 42) -> str:
-    """Reset the SentinelOps environment for a new episode."""
-    obs = env.reset(seed=seed)
-    return obs.model_dump_json()
-
-
-@mcp.tool()
-def step(action_json: str) -> str:
-    """Take a step in the SentinelOps environment with a full action."""
-    action = SentinelAction.model_validate_json(action_json)
-    obs = env.step(action)
-    return obs.model_dump_json()
-
-
-@mcp.tool()
-def get_state() -> str:
-    """Get the current environment state (tick, scores, active attacks)."""
-    return env.state.model_dump_json()
-
-
-# ============ Worker Tools (Enterprise System APIs) ============
-
-@mcp.tool()
-def lookup_customer(customer_id: str) -> str:
-    """Look up a customer record in the CRM system."""
-    result = env.crm.lookup_customer(customer_id)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def update_tier(customer_id: str, new_tier: str) -> str:
-    """Update a customer's tier level (gold/silver/bronze)."""
-    result = env.crm.update_tier(customer_id, new_tier)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def add_note(customer_id: str, note: str) -> str:
-    """Add a note to a customer's record."""
-    result = env.crm.add_note(customer_id, note)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def get_history(customer_id: str) -> str:
-    """Get interaction history for a customer."""
-    result = env.crm.get_history(customer_id)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def check_balance(customer_id: str) -> str:
-    """Check the billing balance for a customer."""
-    result = env.billing.check_balance(customer_id)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def issue_refund(invoice_id: str, amount: float, reason: str) -> str:
-    """Issue a refund for an invoice. Must comply with current refund policy."""
-    result = env.billing.issue_refund(invoice_id, amount, reason)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def apply_credit(customer_id: str, amount: float) -> str:
-    """Apply a credit to a customer's account."""
-    result = env.billing.apply_credit(customer_id, amount)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def generate_invoice(customer_id: str, items: str, amount: float) -> str:
-    """Generate a new invoice for a customer. Items should be comma-separated."""
-    item_list = [i.strip() for i in items.split(",")]
-    result = env.billing.generate_invoice(customer_id, item_list, amount)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def create_ticket(customer_id: str, subject: str, priority: str = "medium") -> str:
-    """Create a new support ticket."""
-    result = env.ticketing.create_ticket(customer_id, subject, TicketPriority(priority))
-    return json.dumps(result)
-
-
-@mcp.tool()
-def assign_ticket(ticket_id: str, agent_name: str) -> str:
-    """Assign a ticket to an agent."""
-    result = env.ticketing.assign_ticket(ticket_id, agent_name)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def escalate_ticket(ticket_id: str, reason: str) -> str:
-    """Escalate a ticket to a senior agent."""
-    result = env.ticketing.escalate(ticket_id, reason)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def resolve_ticket(ticket_id: str, resolution: str) -> str:
-    """Resolve a ticket with the given resolution."""
-    result = env.ticketing.resolve(ticket_id, resolution)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def check_sla(ticket_id: str) -> str:
-    """Check SLA status for a ticket (ticks remaining before breach)."""
-    result = env.ticketing.check_sla(ticket_id)
-    return json.dumps(result)
-
-
-@mcp.tool()
-def get_schema(system: str) -> str:
-    """Get the current field schema for a system (crm/billing/ticketing).
-    Critical after schema drift attacks -- fields may have been renamed."""
-    sys_obj = env._get_system(system)
-    if sys_obj is None:
-        return json.dumps({"error": f"Unknown system: {system}"})
-    return json.dumps(sys_obj.get_schema())
-
-
-@mcp.tool()
-def get_current_policy(policy_type: str = "refund") -> str:
-    """Get the current policy (refund or sla).
-    Critical after policy drift attacks -- rules may have changed."""
-    if policy_type == "refund":
-        return json.dumps(env.billing.get_current_policy())
-    elif policy_type == "sla":
-        return json.dumps(env.ticketing.get_sla_rules())
-    return json.dumps({"error": f"Unknown policy type: {policy_type}"})
-
-
-# ============ Attacker Tools ============
-
-@mcp.tool()
-def launch_attack(attack_type: str, target_system: str, parameters_json: str = "{}") -> str:
-    """Launch an attack on an enterprise system.
-    Types: schema_drift, policy_drift, social_engineering, rate_limit.
-    Costs 0.3 reward points per attack."""
-    import json as _json
-    params = _json.loads(parameters_json)
-    params["attack_type"] = attack_type
-    params["target_system"] = target_system
-    result = env.attack_manager.launch_attack(
-        AttackType(attack_type), TargetSystem(target_system), params, env.tick
-    )
-    return json.dumps(result)
-
-
-@mcp.tool()
-def pass_turn() -> str:
-    """Pass the attacker's turn without launching an attack."""
-    return json.dumps({"status": "passed"})
-
-
-@mcp.tool()
-def get_attack_budget() -> str:
-    """Get the remaining attack budget for this episode."""
-    budget = env.attack_manager.attack_budget if env.attack_manager else 10.0
-    return json.dumps({"budget": budget})
-
-
-# ============ Oversight Tools ============
-
-@mcp.tool()
-def flag_action(flagged: bool, severity: int = 3,
-                violation_type: str = "policy_violation",
-                explanation: str = "") -> str:
-    """Flag or approve a worker action. Used by the oversight agent."""
-    return json.dumps({
-        "flagged": flagged,
-        "severity": severity,
-        "violation_type": violation_type,
-        "explanation": explanation,
-    })
-
-
-@mcp.tool()
-def get_trajectory(num_recent: int = 5) -> str:
-    """Get recent action trajectory for oversight analysis."""
-    trajectory = env.trajectory[-num_recent:] if env.trajectory else []
-    return json.dumps(trajectory)
-```
-
-### Step 3: MCP-X Gateway Config (10 min)
-
-```toml
-# mcp-x/config.toml
-[clients]
-[clients.orchestrator]
-auth_token = "orch-token-001"
-
-[clients.attacker]
-auth_token = "atk-token-001"
-
-[clients.worker]
-auth_token = "wrk-token-001"
-
-[clients.oversight]
-auth_token = "ovs-token-001"
-
-[mcp_servers]
-[mcp_servers.sentinelops]
-url = "http://localhost:9500/mcp/"
-from_client = "orchestrator"
-
-[allow]
-[allow.sentinelops]
-attacker = ["launch_attack", "pass_turn", "get_attack_budget", "step", "reset", "get_state"]
-worker = ["lookup_customer", "update_tier", "add_note", "get_history", "check_balance", "issue_refund", "apply_credit", "generate_invoice", "create_ticket", "assign_ticket", "escalate_ticket", "resolve_ticket", "check_sla", "get_schema", "get_current_policy", "step", "reset", "get_state"]
-oversight = ["flag_action", "get_current_policy", "get_trajectory", "step", "reset", "get_state"]
-```
-
-### Step 4: Copy MCP-X (5 min)
-
-Copy `envbeats/mcp-x/mcp_x.py` to `mcp-x/mcp_x.py`. No modifications needed -- it reads from `config.toml` in its working directory.
-
-```bash
-cp envbeats/mcp-x/mcp_x.py mcp-x/mcp_x.py
-```
-
-### Step 5: run_server.py -- Start Script (10 min)
-
-```python
-# run_server.py
-"""Start both the OpenEnv HTTP server and MCP server."""
-import subprocess
-import sys
-import time
-
-def main():
-    # Start OpenEnv HTTP server on port 8000
-    env_proc = subprocess.Popen([
-        sys.executable, "-m", "uvicorn",
-        "sentinelops_arena.server:app",
-        "--host", "0.0.0.0", "--port", "8000",
-    ])
-
-    # Start FastMCP server on port 9500
-    mcp_proc = subprocess.Popen([
-        sys.executable, "-c",
-        "from sentinelops_arena.mcp_tools import mcp; mcp.run()"
-    ])
-
-    # Start MCP-X gateway on port 9000
-    mcpx_proc = subprocess.Popen([
-        sys.executable, "mcp-x/mcp_x.py", "--port", "9000"
-    ])
-
-    print("Servers started:")
-    print("  OpenEnv HTTP: http://localhost:8000")
-    print("  MCP (FastMCP): http://localhost:9500")
-    print("  MCP-X Gateway: http://localhost:9000")
-
-    try:
-        env_proc.wait()
-    except KeyboardInterrupt:
-        env_proc.terminate()
-        mcp_proc.terminate()
-        mcpx_proc.terminate()
-
-if __name__ == "__main__":
-    main()
-```
-
----
-
-## VERIFY
-
-### Test 1: OpenEnv HTTP Server
 ```bash
 # Start server
 uvicorn sentinelops_arena.server:app --port 8000 &
 
 # Test reset
 curl -X POST http://localhost:8000/reset -H "Content-Type: application/json" -d '{}'
-# Should return: {"observation": {...}, "reward": null, "done": false}
 
-# Test step
+# Test step (regular action)
 curl -X POST http://localhost:8000/step -H "Content-Type: application/json" \
   -d '{"action": {"agent": "attacker", "action_type": "pass"}}'
-# Should return observation for worker
+
+# Test step (MCP list_tools -- auto-routed by MCPEnvironment)
+curl -X POST http://localhost:8000/step -H "Content-Type: application/json" \
+  -d '{"action": {"type": "list_tools"}}'
+# Should return available MCP tools
+
+# Test step (MCP call_tool -- auto-routed by MCPEnvironment)
+curl -X POST http://localhost:8000/step -H "Content-Type: application/json" \
+  -d '{"action": {"type": "call_tool", "tool_name": "lookup_customer", "arguments": {"customer_id": "C000"}}}'
+# Should return customer data
 
 # Test state
 curl http://localhost:8000/state
-# Should return: {"episode_id": "...", "step_count": 1, "tick": 0, ...}
 
 # Test schema
 curl http://localhost:8000/schema
-# Should return action/observation/state JSON schemas
 
 kill %1
 ```
 
-### Test 2: MCP Tools (FastMCP)
+### Step 3: Verify WebSocket MCP Path (10 min)
+
 ```python
-# Start MCP server first, then:
-from mcp.client.streamable_http import streamablehttp_client
-from mcp.client.session import ClientSession
+# Quick WebSocket test
 import asyncio
+import json
+import websockets
 
-async def test_mcp():
-    async with streamablehttp_client(url="http://localhost:9500/mcp/") as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
+async def test_ws():
+    async with websockets.connect("ws://localhost:8000/ws") as ws:
+        # Reset
+        await ws.send(json.dumps({"type": "reset", "data": {"seed": 42}}))
+        resp = json.loads(await ws.recv())
+        print(f"Reset: {resp['type']}")
 
-            # List tools
-            tools = await session.list_tools()
-            tool_names = [t.name for t in tools.tools]
-            print(f"Available tools: {tool_names}")
-            assert "reset" in tool_names
-            assert "step" in tool_names
-            assert "lookup_customer" in tool_names
+        # MCP via WebSocket
+        await ws.send(json.dumps({
+            "type": "mcp",
+            "data": {"method": "tools/list", "params": {}, "id": 1}
+        }))
+        resp = json.loads(await ws.recv())
+        print(f"MCP tools via WS: {resp}")
 
-            # Call reset
-            result = await session.call_tool("reset", {"seed": 42})
-            print(f"Reset result: {result.content[0].text[:100]}")
-
-            # Call get_state
-            result = await session.call_tool("get_state", {})
-            print(f"State: {result.content[0].text[:100]}")
-
-asyncio.run(test_mcp())
+asyncio.run(test_ws())
 ```
 
-### Test 3: MCP-X Gateway (Per-Agent Isolation)
-```python
-import asyncio
-from mcp.client.streamable_http import streamablehttp_client
-from mcp.client.session import ClientSession
+---
 
-async def test_mcpx():
-    # Worker should see worker tools
-    headers = {"Authorization": "Bearer wrk-token-001"}
-    async with streamablehttp_client(url="http://localhost:9000/mcp/", headers=headers) as (r, w, _):
-        async with ClientSession(r, w) as session:
-            await session.initialize()
-            tools = await session.list_tools()
-            names = [t.name for t in tools.tools]
-            print(f"Worker tools: {names}")
-            assert "lookup_customer" in names
-            assert "launch_attack" not in names  # worker cannot attack
+## What MCPEnvironment Gives Us For Free
 
-    # Attacker should see attacker tools
-    headers = {"Authorization": "Bearer atk-token-001"}
-    async with streamablehttp_client(url="http://localhost:9000/mcp/", headers=headers) as (r, w, _):
-        async with ClientSession(r, w) as session:
-            await session.initialize()
-            tools = await session.list_tools()
-            names = [t.name for t in tools.tools]
-            print(f"Attacker tools: {names}")
-            assert "launch_attack" in names
-            assert "lookup_customer" not in names  # attacker cannot use CRM
+| Feature | How |
+|---------|-----|
+| MCP tool discovery | `ListToolsAction` -> returns all tools with schemas |
+| MCP tool invocation | `CallToolAction(tool_name, arguments)` -> calls FastMCP tool |
+| Reserved name validation | Rejects tools named `reset`, `step`, `state`, `close` |
+| Timeout handling | Configurable timeout on tool calls |
+| Error categorization | `ToolError` with types: execution_error, invalid_args, tool_not_found, timeout |
+| WebSocket MCP path | `/ws` endpoint supports `type: "mcp"` messages |
+| Async support | `_run_async_safely()` handles both sync and async contexts |
 
-asyncio.run(test_mcpx())
+## What We DON'T Need (CUT)
+
+| Removed | Reason |
+|---------|--------|
+| `mcp_tools.py` | MCP tools defined inside `environment.py` via FastMCP |
+| `mcp-x/` directory | MCP-X gateway CUT -- MCPEnvironment handles tool exposure |
+| `config.toml` | No MCP-X = no per-agent access control config |
+| `run_server.py` | Single server is enough |
+| Per-agent JWT tokens | Nice-to-have, not needed for demo/judging |
+
+---
+
+## VERIFY
+
+### Test 1: HTTP Server starts
+```bash
+uvicorn sentinelops_arena.server:app --port 8000
+# Should start without errors
+# Should show "Uvicorn running on http://0.0.0.0:8000"
+```
+
+### Test 2: All endpoints return valid JSON
+```bash
+# Reset -> Observation JSON
+# Step -> Observation JSON
+# State -> State JSON
+# Schema -> Action/Observation/State schemas
+```
+
+### Test 3: MCP tools discoverable via HTTP
+```bash
+# POST /step with ListToolsAction -> list of tools
+# Verify: lookup_customer, issue_refund, get_schema, launch_attack etc. all present
+# Verify: no reserved names (reset, step, state, close)
+```
+
+### Test 4: MCP tools callable via HTTP
+```bash
+# POST /step with CallToolAction -> tool result
+# Call lookup_customer("C000") -> customer data
+# Call get_schema("crm") -> field list
+# Call get_current_policy("refund") -> policy values
 ```
 
 ---
@@ -461,38 +189,30 @@ asyncio.run(test_mcpx())
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| `Port 8000/9500/9000 already in use` | Previous server still running | `kill $(lsof -t -i:PORT)` |
-| `ConnectionRefused on MCP-X` | MCP server not started before MCP-X | Start env server + MCP server before MCP-X |
-| FastMCP `stateless_http=True` not working | Wrong FastMCP version | Check `pip show fastmcp` -- need recent version |
-| MCP-X `ProxyClient` error | Dummy server hack missing | Ensure `_dummy_0` and `_dummy_1` servers in config |
-| `streamablehttp_client` connection error | Async context manager issue | Must use `async with` pattern |
-| `Bearer token` rejected | Token mismatch with config.toml | Verify token strings match exactly |
-| MCP tool returns empty | Environment not reset | Call `reset` before other tools |
-| `model_dump_json()` fails on complex types | Pydantic serialization issue | Use `json.dumps()` for dict results, `model_dump_json()` for Pydantic models |
+| `Port 8000 already in use` | Previous server running | `kill $(lsof -t -i:8000)` |
+| `create_app()` fails with type error | Wrong argument types | Pass class (not instance), Action class, Observation class |
+| MCP tools not showing up | Tools defined after `super().__init__()` | Define tools BEFORE calling `super().__init__(mcp)` |
+| `ValueError: reserved names` | Tool named `reset` or `step` | Rename the tool |
+| WebSocket MCP not working | Wrong message format | Use `{"type": "mcp", "data": {"method": "tools/list", ...}}` |
+| `ListToolsAction` not recognized | `create_app` doesn't know about MCP types | May need to pass both `SentinelAction` and MCP action types to create_app |
 
 ---
 
 ## EXIT CRITERIA
 
 - [ ] `uvicorn sentinelops_arena.server:app` starts without errors
-- [ ] HTTP `/reset`, `/step`, `/state`, `/schema` all return valid JSON
-- [ ] FastMCP server starts on port 9500
-- [ ] All MCP tools are discoverable via `list_tools`
-- [ ] `reset`, `step`, `get_state` MCP tools work
-- [ ] `lookup_customer`, `issue_refund`, etc. return valid data
-- [ ] MCP-X gateway starts on port 9000
-- [ ] Worker token sees only worker tools
-- [ ] Attacker token sees only attacker tools
-- [ ] Oversight token sees only oversight tools
-- [ ] Cross-role tool access denied (worker can't call launch_attack)
+- [ ] HTTP `/reset`, `/step`, `/state`, `/schema` return valid JSON
+- [ ] `ListToolsAction` via `/step` returns all enterprise system tools
+- [ ] `CallToolAction` via `/step` successfully calls tools
+- [ ] WebSocket `/ws` endpoint accepts connections
 
 ---
 
 ## ROLLBACK PLAN
 
-If Phase 3 takes longer than 1.5 hours:
-1. **Cut MCP-X gateway** -- submit with direct MCP only (no per-agent isolation). Add MCP-X in Phase 6 polish.
-2. **Reduce MCP tools** -- only expose `reset`, `step`, `get_state` (no individual system tools). Agents call `step()` with full actions.
-3. **Cut MCP entirely** -- use only HTTP server. Agents call REST endpoints directly.
+Phase 3 is already minimal. If it takes longer than 30 minutes:
+1. **Skip WebSocket verification** -- HTTP-only is fine for demo
+2. **Skip schema endpoint check** -- not needed for judging
+3. **If `create_app()` fails entirely** -- serve the Gradio app directly without the OpenEnv HTTP layer. The environment still works via direct Python calls.
 
 Do NOT cut: `server.py` with `create_app()`. This is required for HF Spaces deployment.

@@ -1,8 +1,10 @@
 # Phase 5: Training Script -- Colab Notebook with GRPO
 
-**Time:** 2.5 hours (Hours 7.5-10)
+**Time:** 2 hours MAX (Hours 8.5-10.5)
 **Priority:** HIGH -- Training Script is 20% of judging and REQUIRED for submission
 **Depends on:** Phase 2 (working environment)
+
+**HARD RULE:** If GRPO is not working after 1.5 hours (hour 10), FALL BACK TO SFT immediately. Training only needs to show "improvement" -- even a 0.1 reward increase counts. Do not spend more than 2h total on this phase.
 
 ---
 

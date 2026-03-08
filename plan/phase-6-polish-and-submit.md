@@ -1,7 +1,7 @@
 # Phase 6: Polish, Video, and Submit
 
-**Time:** 4 hours (Hours 10-14)
-**Priority:** CRITICAL -- this is when everything comes together
+**Time:** 3.5 hours (Hours 10.5-14)
+**Priority:** CRITICAL -- this is when everything comes together. Storytelling = 30% of judging.
 **Depends on:** All previous phases
 
 ---
@@ -10,11 +10,10 @@
 
 | Task | Est. Time |
 |------|-----------|
-| Polish demo quality (before/after, visuals) | 1h (Hours 10-11) |
-| Stretch goals (if time) | 1h (Hours 11-12) |
-| Final deployment + verification | 1h (Hours 12-13) |
-| Video script + recording + upload | 45 min (Hours 13-13:45) |
-| Submission form | 15 min (Hours 13:45-14) |
+| Polish demo quality + stretch goals | 1h (Hours 10.5-11.5) |
+| Record and upload video | 1.5h (Hours 11.5-13) |
+| Final deployment + verification | 0.5h (Hours 13-13.5) |
+| Submission form | 0.5h (Hours 13.5-14) |
 
 ---
 
@@ -34,11 +33,11 @@
 - Highlight "key moments" in the replay (attack launched, error recovered, social eng resisted)
 - Add score differential chart
 
-**Optional: MCP-X Demo Tab**
-If MCP-X is working:
-- Add a tab showing per-agent tool lists
-- Demonstrate tool isolation (worker can't call launch_attack)
-- Show JWT-based authentication in action
+**Optional: MCP Tool Discovery Tab**
+If time permits:
+- Add a Gradio tab showing MCP tool list (via ListToolsAction)
+- Show tool schemas and descriptions
+- Demonstrate CallToolAction calling enterprise system APIs
 
 ### Hour 11-12: Stretch Goals (Pick Based on Time)
 
@@ -89,58 +88,40 @@ uvicorn sentinelops_arena.server:app --port 8000  # HTTP API works
 curl http://localhost:8000/schema  # Schema endpoint returns
 ```
 
-### Hour 13-13:45: Demo Video
+### Hour 11.5-13: Demo Video
 
-**Video Script (aim for 1-3 minutes):**
+**PRIMARY Video Script (60 seconds -- tight and punchy):**
+
+Write this script BEFORE starting the hackathon (Phase 0). It drives clarity on what to build and demo.
 
 ```
-[SLIDE 1: Title - 5 seconds]
-"SentinelOps Arena: Multi-Agent Self-Play for Enterprise Security"
+[0-10s: Problem statement]
+"Enterprise AI agents break when schemas change, policies drift,
+or they face social engineering. How do we train resilient agents?"
 
-[SCREEN: Gradio app - 15 seconds]
-"SentinelOps Arena is a multi-agent self-play training environment
-built on OpenEnv. Three AI agents -- Attacker, Worker, and
-Oversight -- interact with simulated enterprise systems."
+[10-20s: What SentinelOps Arena is]
+"SentinelOps Arena: a multi-agent self-play environment on OpenEnv.
+Three agents -- Attacker, Worker, and Oversight -- compete in
+simulated enterprise systems."
 
-[SCREEN: Run Episode tab - 20 seconds]
-"Let me show you an episode. The attacker launches schema drift
-at tick 7 -- renaming customer_id to account_id. Watch what
-happens when the untrained worker hits this."
-[Click Run Episode with trained=False]
-"The worker crashes on the schema change. It doesn't know how
-to recover."
+[20-35s: SCREEN -- Demo showing attack -> error -> recovery cycle]
+[Click Run Episode in Gradio]
+"Watch: the attacker launches schema drift at tick 7. The untrained
+worker crashes. But the trained worker detects the error, queries
+get_schema, adapts, and continues serving customers."
 
-[SCREEN: Comparison tab - 20 seconds]
-"Now let's see the trained worker handle the same attacks."
-[Click Run Comparison]
-"The trained worker detects the KeyError, calls get_schema to
-discover the new field name, and continues serving customers.
-Score improvement is clear."
+[35-50s: SCREEN -- Training reward curve]
+[Show Colab training curves]
+"We train with GRPO using Unsloth and TRL. The reward signal
+comes directly from the environment. Here you can see
+improvement over training steps."
 
-[SCREEN: Inspector tab - 10 seconds]
-"Under the hood, we have 15 customers, 15 invoices, 10 tickets,
-and 30 customer tasks per episode. Four attack types: schema
-drift, policy drift, social engineering, and rate limiting."
-
-[SCREEN: Colab notebook - 15 seconds]
-"Training uses GRPO with Unsloth and TRL. The environment
-provides reward signals directly to the training loop. Here
-you can see the reward improving over training steps."
-[Show training curves]
-
-[SLIDE 2: Partner Tracks - 10 seconds]
-"We target two partner tracks:
-Fleet AI -- our Oversight agent monitors and explains Worker behavior
-Patronus AI -- schema and policy drift are core attack types"
-
-[SLIDE 3: Architecture - 10 seconds]
-"Built on OpenEnv with MCP tools and an MCP-X gateway for
-per-agent tool isolation. Three agents, three systems,
-self-play training via GRPO."
-
-[END - 5 seconds]
-"SentinelOps Arena. Try it on HuggingFace Spaces."
+[50-60s: Partner tracks + close]
+"Built for Fleet AI -- scalable oversight -- and Patronus AI --
+schema drift. Try it on HuggingFace Spaces."
 ```
+
+**EXTENDED Video Script (if time permits, 2-3 minutes):**
 
 **Recording instructions:**
 1. Open Gradio app in browser

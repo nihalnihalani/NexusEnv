@@ -1,8 +1,10 @@
 # Phase 4: Demo Script + Gradio App + HF Spaces Deployment
 
-**Time:** 2 hours (Hours 5.5-7.5)
-**Priority:** HIGH -- Storytelling is 30% of judging
-**Depends on:** Phase 3 (MCP + server working)
+**Time:** 2 hours (Hours 6.5-8.5)
+**Priority:** HIGH -- Storytelling is 30% of judging. Innovation (40%) + Storytelling (30%) = 70% non-code.
+**Depends on:** Phase 3 (server working)
+
+**IMPORTANT:** Deploy to HF Spaces at the END of this phase as INSURANCE SUBMISSION (Checkpoint 2). This is a good submission even if training fails later.
 
 ---
 
