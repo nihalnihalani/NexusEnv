@@ -124,10 +124,10 @@ class RandomizedAttacker:
 
     SCHEMA_DRIFT_RENAMES = [
         {"old_field": "name", "new_field": "full_name"},
-        {"old_field": "email", "new_field": "contact_email"},
-        {"old_field": "address", "new_field": "mailing_address"},
-        {"old_field": "phone", "new_field": "phone_number"},
-        {"old_field": "id", "new_field": "customer_id"},
+        {"old_field": "contact_email", "new_field": "email_address"},
+        {"old_field": "region", "new_field": "geo_region"},
+        {"old_field": "tier", "new_field": "membership_level"},
+        {"old_field": "notes", "new_field": "annotations"},
     ]
 
     POLICY_DRIFT_CHANGES = [
