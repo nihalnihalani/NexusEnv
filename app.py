@@ -23,10 +23,13 @@ from sentinelops_arena.metrics import (
 from sentinel_theme import SentinelTheme, CUSTOM_CSS, HEADER_HTML
 from replay_html import format_replay_html
 from chart_helpers import (
+    INTERESTING_SEEDS,
     build_score_progression_df,
     build_attack_timeline_df,
     build_comparison_df,
     build_verdict_html,
+    build_reward_breakdown_df,
+    build_episode_summary_html,
     format_scores_html,
     format_comparison_scores_html,
 )
@@ -44,6 +47,14 @@ from inspector import (
 # -------------------------------------------------------------------
 
 
+def apply_preset_seed(preset_label):
+    """Extract seed from preset dropdown label."""
+    for s in INTERESTING_SEEDS:
+        if s["label"] == preset_label:
+            return s["seed"]
+    return 42
+
+
 def run_single_episode(seed, trained):
     """Run a single episode and return formatted replay + charts + metrics."""
     log, scores = run_episode(trained=bool(trained), seed=int(seed))
@@ -52,11 +63,13 @@ def run_single_episode(seed, trained):
     scores_html = format_scores_html(scores)
     metrics = compute_episode_metrics(log)
     metrics_html = format_metrics_html(metrics)
+    summary_html = build_episode_summary_html(log, scores)
 
     score_df = build_score_progression_df(log)
     attack_df = build_attack_timeline_df(log)
+    reward_df = build_reward_breakdown_df(log)
 
-    return html, scores_html, metrics_html, score_df, attack_df
+    return html, scores_html, metrics_html, summary_html, score_df, attack_df, reward_df
 
 
 def run_before_after(seed):
@@ -135,16 +148,33 @@ with gr.Blocks(title="SentinelOps Arena", fill_width=True) as demo:
                 # Left sidebar for controls
                 with gr.Column(scale=1, min_width=300):
                     gr.Markdown("### Episode Configuration")
+                    seed_presets = gr.Dropdown(
+                        choices=[s["label"] for s in INTERESTING_SEEDS],
+                        value=INTERESTING_SEEDS[0]["label"],
+                        label="Scenario Presets",
+                        info="Curated seeds showcasing different attack patterns.",
+                    )
                     seed_input = gr.Number(
                         value=42, label="Random Seed", precision=0,
-                        info="Seed for generating customer scenarios and attack patterns."
+                        info="Or enter a custom seed."
                     )
                     trained_toggle = gr.Checkbox(
                         value=False, label="Use Trained Worker",
                         info="Toggle to use a worker trained via GRPO instead of a naive heuristic worker."
                     )
-                    run_btn = gr.Button("▶ Run Episode", variant="primary", size="lg")
-                    
+                    run_btn = gr.Button("Run Episode", variant="primary", size="lg")
+
+                    # Preset updates seed
+                    seed_presets.change(
+                        apply_preset_seed,
+                        inputs=[seed_presets],
+                        outputs=[seed_input],
+                    )
+
+                    gr.Markdown("---")
+                    gr.Markdown("### Episode Summary")
+                    summary_output = gr.HTML(elem_classes=["glow-card"])
+
                     gr.Markdown("---")
                     gr.Markdown("### Final Scores")
                     scores_output = gr.HTML(elem_classes=["glow-card"])
@@ -177,11 +207,23 @@ with gr.Blocks(title="SentinelOps Arena", fill_width=True) as demo:
                                     tooltip=["attack_type", "count"],
                                     height=350,
                                 )
+                        with gr.TabItem("Reward Breakdown"):
+                            reward_plot = gr.BarPlot(
+                                x="agent",
+                                y="total",
+                                color="reward_type",
+                                title="Per-Agent Reward Breakdown (Positive vs Negative)",
+                                tooltip=["agent", "total", "reward_type"],
+                                height=400,
+                            )
 
             run_btn.click(
                 run_single_episode,
                 inputs=[seed_input, trained_toggle],
-                outputs=[replay_output, scores_output, metrics_output, score_plot, attack_plot],
+                outputs=[
+                    replay_output, scores_output, metrics_output,
+                    summary_output, score_plot, attack_plot, reward_plot,
+                ],
             )
 
         # ============================================================
@@ -199,8 +241,8 @@ with gr.Blocks(title="SentinelOps Arena", fill_width=True) as demo:
                         value=42, label="Random Seed", precision=0,
                         info="Ensures identical attack sequence for fair comparison."
                     )
-                    comp_btn = gr.Button("▶ Run Comparison", variant="primary", size="lg")
-                    
+                    comp_btn = gr.Button("Run Comparison", variant="primary", size="lg")
+
                     gr.Markdown("---")
                     gr.Markdown("### Training Impact")
                     verdict_output = gr.HTML(elem_classes=["glow-card"])
@@ -209,18 +251,18 @@ with gr.Blocks(title="SentinelOps Arena", fill_width=True) as demo:
                     gr.Markdown("---")
                     gr.Markdown("### Security Metrics")
                     comp_metrics_output = gr.HTML(elem_classes=["glow-card"])
-                    
+
                 with gr.Column(scale=3):
                     with gr.Tabs():
                         with gr.TabItem("Execution Replays"):
                             with gr.Row():
                                 with gr.Column():
-                                    gr.Markdown("#### 🛑 Untrained Worker")
+                                    gr.Markdown("#### Untrained Worker")
                                     untrained_output = gr.HTML(elem_classes=["glow-card"])
                                 with gr.Column():
-                                    gr.Markdown("#### 🚀 Trained Worker")
+                                    gr.Markdown("#### Trained Worker")
                                     trained_output = gr.HTML(elem_classes=["glow-card"])
-                        
+
                         with gr.TabItem("Score Analytics"):
                             with gr.Row():
                                 comparison_bar = gr.BarPlot(
@@ -280,11 +322,11 @@ with gr.Blocks(title="SentinelOps Arena", fill_width=True) as demo:
                         value=42, label="Random Seed", precision=0,
                         info="Seed used for procedural generation of records."
                     )
-                    inspect_btn = gr.Button("🔍 Inspect Databases", variant="primary", size="lg")
-                    
+                    inspect_btn = gr.Button("Inspect Databases", variant="primary", size="lg")
+
                     gr.Markdown("---")
                     config_output = gr.HTML(elem_classes=["glow-card"])
-                    
+
                 with gr.Column(scale=3):
                     with gr.Tabs():
                         with gr.TabItem("CRM System (Customers)"):
@@ -337,6 +379,26 @@ with gr.Blocks(title="SentinelOps Arena", fill_width=True) as demo:
         with gr.TabItem("About"):
             gr.Markdown(
                 """
+## Why This Matters
+
+Enterprise AI systems face a critical tension: they must be **maximally helpful**
+to users while remaining **robust against adversarial manipulation**. Current safety
+benchmarks test these properties in isolation -- a model either passes a jailbreak
+test or it doesn't. But real-world attacks are **adaptive**: attackers change
+strategy based on what works, combine attack vectors, and exploit the gap between
+"safe" and "useful."
+
+SentinelOps Arena solves this with **multi-agent self-play**. Instead of testing
+against a fixed set of attacks, the Attacker agent **learns** to find weaknesses,
+the Worker agent **learns** to resist them while staying productive, and the
+Oversight agent **learns** to catch failures with minimal false alarms. This creates
+a **natural difficulty curriculum** that scales with the model's capabilities.
+
+The result: agents that are both safer **and** more useful than those trained on
+static benchmarks.
+
+---
+
 ## What is SentinelOps Arena?
 
 A realistic enterprise **"red team vs blue team + judge"** RL arena that trains
@@ -396,6 +458,28 @@ Each tick: Attacker acts &rarr; Worker acts &rarr; Oversight acts
 
 ---
 
+## GRPO Training Pipeline
+
+Uses **GRPO (Group Relative Policy Optimization)** with 4 scaled reward functions:
+
+1. **Format Exact** (weight 0.3) -- Strict JSON format validation
+2. **Format Approximate** (weight 0.2) -- Partial format credit
+3. **Action Correctness** (weight 0.5) -- Role-specific action validation with
+   exploit prevention (contextual SE detection, diminishing returns on passes,
+   anti-gaming for oversight)
+4. **Environment Execution** (weight 1.0) -- Parses completion into a
+   `SentinelAction`, runs it through the real environment, returns actual reward.
+   For attacker, simulates 6 downstream steps to capture worker failures.
+
+All 3 agents train sequentially on the same model with role-specific system
+prompts, observation formatters, and reward functions.
+
+```
+python train.py --agent all --model_name unsloth/Qwen2.5-1.5B-Instruct --use_unsloth
+```
+
+---
+
 ## Key Metrics
 
 | Metric | What it measures |
@@ -405,34 +489,25 @@ Each tick: Attacker acts &rarr; Worker acts &rarr; Oversight acts
 | **False Positive Rate (FPR)** | Fraction of oversight flags that were false alarms |
 | **Mean Time to Detect (MTTD)** | Avg ticks between an attack and the worker's defensive response |
 | **Social Eng. Resistance** | Fraction of social engineering attacks resisted |
-
----
-
-## Training
-
-Uses **GRPO (Group Relative Policy Optimization)** with Unsloth + TRL.
-The Worker agent learns to produce valid JSON actions, detect schema/policy
-drift, and resist social engineering -- all through reward shaping in the
-SentinelOps environment.
-
-```
-python train.py --model_name unsloth/Llama-3.2-3B-Instruct --use_unsloth
-```
+| **Drift Adaptation Rate** | Fraction of schema/policy drifts detected by worker |
+| **Oversight Accuracy** | Correct flag/approve decisions as fraction of total |
 
 ---
 
 ## Partner Tracks
 
-- **Fleet AI**: Scalable Oversight -- the Oversight agent monitors and explains
-  Worker behavior in real time
-- **Patronus AI**: Schema Drift -- schema and policy drift are core attack types
-  that test the Worker's ability to adapt
+- **Fleet AI** ($10K -- Scalable Oversight): The Oversight agent monitors and
+  explains Worker behavior in real time, providing interpretable explanations
+  for every flag decision with measured explanation quality scores.
+- **Patronus AI** ($10K -- Schema Drift): Schema and policy drift are core attack
+  types. The Worker must dynamically discover new field names via `get_schema()`
+  and verify current business rules via `get_current_policy()`.
 
 ---
 
 ## Tech Stack
 
-OpenEnv 0.2.x | FastMCP | Gradio 6 | HuggingFace TRL | Unsloth | Pydantic
+OpenEnv 0.2.x | FastMCP | Gradio 6 | HuggingFace TRL | Unsloth | vLLM | Pydantic
 
 ### Links
 - [OpenEnv Framework](https://github.com/meta-pytorch/OpenEnv)
