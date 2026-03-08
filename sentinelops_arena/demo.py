@@ -130,12 +130,20 @@ class RandomizedAttacker:
         {"old_field": "notes", "new_field": "annotations"},
     ]
 
-    POLICY_DRIFT_CHANGES = [
+    POLICY_DRIFT_CHANGES_BILLING = [
         {"window_ticks": 4, "requires_approval": True, "max_amount": 2000},
         {"window_ticks": 2, "requires_approval": True, "max_amount": 500},
         {"window_ticks": 6, "requires_approval": False, "max_amount": 10000},
         {"window_ticks": 1, "requires_approval": True, "max_amount": 100},
         {"window_ticks": 3, "requires_approval": False, "max_amount": 5000},
+    ]
+
+    POLICY_DRIFT_CHANGES_TICKETING = [
+        {"high": 3, "medium": 6, "low": 10},
+        {"high": 2, "medium": 4, "low": 8},
+        {"high": 1, "medium": 3, "low": 6},
+        {"high": 8, "medium": 16, "low": 24},
+        {"high": 4, "medium": 8, "low": 12},
     ]
 
     RATE_LIMIT_OPTIONS = [
@@ -158,7 +166,10 @@ class RandomizedAttacker:
                 **rename,
             }
         if atype == AttackType.POLICY_DRIFT:
-            changes = self.rng.choice(self.POLICY_DRIFT_CHANGES)
+            if target == TargetSystem.TICKETING:
+                changes = self.rng.choice(self.POLICY_DRIFT_CHANGES_TICKETING)
+            else:
+                changes = self.rng.choice(self.POLICY_DRIFT_CHANGES_BILLING)
             return {
                 "attack_type": atype.value,
                 "target_system": target.value,
@@ -182,7 +193,7 @@ class RandomizedAttacker:
     # Valid target systems per attack type (not all systems support all attacks)
     VALID_TARGETS = {
         AttackType.SCHEMA_DRIFT: [TargetSystem.CRM],  # only CRM has apply_schema_drift
-        AttackType.POLICY_DRIFT: [TargetSystem.BILLING],  # only Billing has apply_policy_drift
+        AttackType.POLICY_DRIFT: [TargetSystem.BILLING, TargetSystem.TICKETING],
         AttackType.SOCIAL_ENGINEERING: [TargetSystem.CRM, TargetSystem.BILLING, TargetSystem.TICKETING],
         AttackType.RATE_LIMIT: [TargetSystem.CRM, TargetSystem.BILLING, TargetSystem.TICKETING],
     }

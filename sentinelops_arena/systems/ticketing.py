@@ -137,6 +137,12 @@ class TicketingSystem:
             "sla_rules": self.sla_rules.model_dump(),
         }
 
+    def apply_policy_drift(self, changes: Dict):
+        """Modify SLA rules fields (mirrors billing policy drift)."""
+        data = self.sla_rules.model_dump()
+        data.update(changes)
+        self.sla_rules = SLARules(**data)
+
     def apply_schema_drift(self, old_field: str, new_field: str):
         """Rename a field across all records."""
         self._field_map[old_field] = new_field

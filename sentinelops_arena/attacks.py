@@ -113,17 +113,22 @@ class AttackManager:
     def _execute_policy_drift(
         self, target: TargetSystem, params: Dict[str, Any], tick: int
     ) -> Dict[str, Any]:
-        """Modify refund policy fields on the billing system."""
+        """Modify policy fields on the target system (billing or ticketing)."""
         changes = params.get("changes", {})
         if not changes:
             return {"success": False, "error": "changes dict required"}
 
-        billing = self.systems[TargetSystem.BILLING]
-        billing.apply_policy_drift(changes)
+        system = self.systems[target]
+        if not hasattr(system, "apply_policy_drift"):
+            return {
+                "success": False,
+                "error": f"{target.value} does not support policy drift",
+            }
+        system.apply_policy_drift(changes)
         return {
             "success": True,
             "attack": "policy_drift",
-            "detail": f"Policy changed: {changes}",
+            "detail": f"Policy changed on {target.value}: {changes}",
         }
 
     def _execute_social_engineering(
