@@ -44,7 +44,7 @@ class BillingSystem:
             "invoice_count": len(customer_invoices),
         }
 
-    def issue_refund(self, invoice_id: str, amount: float, reason: str) -> Dict:
+    def issue_refund(self, invoice_id: str, amount: float, reason: str, current_tick: int = 0) -> Dict:
         """Validate refund against current policy and process it."""
         if self._rate_limit_check():
             return {"error": "Rate limit exceeded. Try again next tick."}
@@ -57,7 +57,20 @@ class BillingSystem:
         # Check refund policy
         if amount > self.refund_policy.max_amount:
             return {
-                "error": f"Refund amount ${amount:.2f} exceeds max allowed ${self.refund_policy.max_amount:.2f}"
+                "error": f"Refund amount ${amount:.2f} exceeds max allowed ${self.refund_policy.max_amount:.2f}",
+                "policy_violation": True,
+            }
+
+        # Check refund window
+        invoice_tick = invoice.get("date_tick", 0)
+        if current_tick - invoice_tick > self.refund_policy.window_ticks:
+            return {
+                "error": (
+                    f"Invoice {invoice_id} is outside the refund window "
+                    f"({self.refund_policy.window_ticks} ticks). "
+                    f"Invoice date tick: {invoice_tick}, current tick: {current_tick}"
+                ),
+                "policy_violation": True,
             }
 
         if invoice["status"] == InvoiceStatus.REFUNDED.value:
