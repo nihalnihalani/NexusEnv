@@ -3,11 +3,11 @@ SentinelOps Arena — Multi-Agent Training Script
 =================================================
 GRPO training for Worker, Attacker, and Oversight agents using TRL + Unsloth.
 
-Follows the official OpenEnv + Unsloth GRPO reference patterns:
+Follows the official Unsloth Advanced GRPO LoRA reference pattern:
 - BF16 precision on H100 (load_in_4bit=False)
 - vLLM fast inference (fast_inference=True)
-- Environment-executing reward functions (completions run in SentinelOpsArena)
-- LoRA with lora_alpha = 2 * lora_rank
+- Multiple reward functions (format + environment-executing)
+- LoRA with lora_alpha = lora_rank, adamw_8bit optimizer, cosine scheduler
 
 Each agent learns its role:
 - Worker: handle enterprise tasks, resist attacks, maintain compliance
@@ -24,7 +24,11 @@ Usage:
 
 import argparse
 import json
+import os
 import random
+
+# Pre-start vLLM standby for faster inference (official pattern)
+os.environ["UNSLOTH_VLLM_STANDBY"] = "1"
 
 from sentinelops_arena.environment import SentinelOpsArena
 from sentinelops_arena.models import AgentRole, SentinelAction
@@ -542,72 +546,175 @@ def _execute_action_in_env(action: SentinelAction, agent_role: str, seed: int = 
     return obs.reward
 
 
-def make_reward_function(agent_role: str):
-    """Create an environment-executing reward function for GRPO.
+def match_json_format_exactly(completions, **kwargs):
+    """Reward 1: Does the completion contain a valid JSON action object?
 
-    Follows the official OpenEnv + Unsloth GRPO pattern:
-    1. Parse LLM completion into a SentinelAction
-    2. Execute it in a fresh SentinelOpsArena environment
-    3. Return real environment reward + format bonus
-
-    This replaces pure text-matching with actual environment feedback,
-    which is the key differentiator in the OpenEnv hackathon.
+    Mirrors the reference pattern's `match_format_exactly`.
+    Validates: parseable JSON with an 'action_type' field.
     """
-    def reward_fn(completions, **kwargs):
-        rewards = []
-        for i, completion in enumerate(completions):
+    scores = []
+    for completion in completions:
+        text = completion[0]["content"] if isinstance(completion, list) else str(completion)
+        score = 0.0
+        try:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(text[start:end])
+                if "action_type" in data:
+                    score = 3.0
+        except (json.JSONDecodeError, ValueError):
+            pass
+        scores.append(score)
+    return scores
+
+
+def match_json_format_approximately(completions, **kwargs):
+    """Reward 2: Partial credit for JSON-like structure.
+
+    Mirrors the reference pattern's `match_format_approximately`.
+    Checks for balanced braces, action_type field, and clean output.
+    """
+    scores = []
+    for completion in completions:
+        text = completion[0]["content"] if isinstance(completion, list) else str(completion)
+        score = 0.0
+        # Balanced braces (nested JSON is fine)
+        score += 0.5 if text.count("{") == text.count("}") and text.count("{") >= 1 else -1.0
+        # Has action_type field
+        score += 0.5 if '"action_type"' in text else -1.0
+        # Starts with JSON (clean output, no preamble)
+        score += 0.5 if text.strip().startswith("{") else -1.0
+        # Ends with JSON (no trailing text)
+        score += 0.5 if text.strip().endswith("}") else -1.0
+        scores.append(score)
+    return scores
+
+
+def make_action_correctness_reward(agent_role: str):
+    """Reward 3: Is the action valid for this agent role?
+
+    Mirrors the reference pattern's `check_answer` — verifies the
+    extracted action is semantically correct for the role.
+    """
+    def check_action(completions, **kwargs):
+        scores = []
+        for completion in completions:
             text = completion[0]["content"] if isinstance(completion, list) else str(completion)
-
-            # Step 1: Parse completion into action
             action = _parse_completion_to_action(text, agent_role)
-
             if action is None:
-                # Invalid output — strong negative signal
-                rewards.append(-1.0)
+                scores.append(0.0)
                 continue
 
-            # Step 2: Format validation bonus (valid JSON + correct fields)
-            format_bonus = 0.5
-
-            # Step 3: Execute in environment for real reward
-            try:
-                env_reward = _execute_action_in_env(
-                    action, agent_role, seed=42 + i
-                )
-            except Exception:
-                env_reward = 0.0
-
-            # Step 4: Role-specific quality bonus
-            quality_bonus = 0.0
+            score = 0.0
             try:
                 data = json.loads(text[text.find("{"):text.rfind("}") + 1])
                 if agent_role == "worker":
                     at = data.get("action_type", "")
+                    if at in VALID_WORKER_ACTIONS:
+                        score += 1.5
                     if at in ("get_schema", "get_current_policy"):
-                        quality_bonus = 0.5  # defensive actions
+                        score += 1.5  # defensive actions bonus
                     elif at == "respond":
                         resp = data.get("response_text", "").lower()
                         if any(w in resp for w in ["cannot", "verify", "social engineering"]):
-                            quality_bonus = 1.0  # resisting social engineering
+                            score += 3.0  # resisting social engineering
                 elif agent_role == "attacker":
-                    params = data.get("parameters", {})
-                    at_type = params.get("attack_type", "")
-                    target = params.get("target_system", "")
-                    if at_type in VALID_ATTACKS and target in VALID_TARGETS_FOR_ATTACK.get(at_type, []):
-                        quality_bonus = 0.3  # valid attack + target combo
+                    at = data.get("action_type", "")
+                    if at == "launch_attack":
+                        params = data.get("parameters", {})
+                        at_type = params.get("attack_type", "")
+                        target = params.get("target_system", "")
+                        if at_type in VALID_ATTACKS:
+                            score += 1.0
+                        if target in VALID_TARGETS_FOR_ATTACK.get(at_type, []):
+                            score += 1.5
+                    elif at == "pass":
+                        score += 0.5
                 elif agent_role == "oversight":
+                    at = data.get("action_type", "")
+                    if at in ("flag", "approve"):
+                        score += 1.0
                     explanation = data.get("explanation", "")
                     if explanation and len(explanation) > 50:
-                        quality_bonus = 0.5  # quality explanation
+                        score += 1.5
+                    if explanation and len(explanation) > 20:
+                        score += 0.5
             except (json.JSONDecodeError, ValueError):
-                pass
+                score = -1.5
 
-            # Combined reward: environment signal + format + quality
-            total = env_reward + format_bonus + quality_bonus
-            rewards.append(total)
-        return rewards
+            scores.append(score)
+        return scores
+    return check_action
 
-    return reward_fn
+
+def make_environment_reward(agent_role: str):
+    """Reward 4: Execute the action in a live SentinelOps environment.
+
+    Follows the OpenEnv 2048 reference pattern: reward functions create
+    a fresh environment, execute the completion, and return the real reward.
+    Mirrors the reference pattern's `check_numbers` (ground truth check).
+    """
+    global _ENV_REWARD_PRINTED_TIMES
+    _ENV_REWARD_PRINTED_TIMES = 0
+
+    def check_env(completions, **kwargs):
+        global _ENV_REWARD_PRINTED_TIMES
+        scores = []
+        for i, completion in enumerate(completions):
+            text = completion[0]["content"] if isinstance(completion, list) else str(completion)
+            action = _parse_completion_to_action(text, agent_role)
+
+            if action is None:
+                scores.append(0.0)
+                continue
+
+            try:
+                env_reward = _execute_action_in_env(action, agent_role, seed=42 + i)
+                scores.append(env_reward * 1.5)  # Scale env reward for impact
+            except Exception:
+                scores.append(0.0)
+
+            # Print sample every 5 steps (matches reference debug pattern)
+            if _ENV_REWARD_PRINTED_TIMES % 5 == 0 and i == 0:
+                print(f"  [{agent_role}] completion: {text[:100]}...")
+                print(f"  [{agent_role}] env_reward: {scores[-1]:.2f}")
+            _ENV_REWARD_PRINTED_TIMES += 1
+
+        return scores
+    return check_env
+
+
+_ENV_REWARD_PRINTED_TIMES = 0
+
+
+def make_reward_functions(agent_role: str) -> list:
+    """Create the full set of reward functions for GRPO.
+
+    Returns 4 reward functions matching the reference notebook pattern:
+    1. match_json_format_exactly — strict format check
+    2. match_json_format_approximately — partial format credit
+    3. check_action — role-specific action correctness
+    4. check_env — environment-executing reward
+
+    Usage: reward_funcs = make_reward_functions("worker")
+    """
+    return [
+        match_json_format_exactly,
+        match_json_format_approximately,
+        make_action_correctness_reward(agent_role),
+        make_environment_reward(agent_role),
+    ]
+
+
+# Backward-compatible single reward function
+def make_reward_function(agent_role: str):
+    """Single combined reward function (for testing/evaluation)."""
+    fns = make_reward_functions(agent_role)
+    def combined(completions, **kwargs):
+        all_scores = [fn(completions, **kwargs) for fn in fns]
+        return [sum(s[i] for s in all_scores) for i in range(len(completions))]
+    return combined
 
 
 # -------------------------------------------------------------------
@@ -708,13 +815,14 @@ def train_single_agent(role: str, args):
 
     # --- Step 3: Load model ---
     print(f"\n[3/4] Loading model: {args.model_name}...")
-    lora_rank = 16
+    max_seq_length = 2048
+    lora_rank = 64
     if args.use_unsloth:
         from unsloth import FastLanguageModel
 
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=args.model_name,
-            max_seq_length=768,
+            max_seq_length=max_seq_length,
             load_in_4bit=False,  # BF16 for H100s (official recommendation)
             fast_inference=True,  # vLLM for fast GRPO generation
             max_lora_rank=lora_rank,
@@ -727,10 +835,9 @@ def train_single_agent(role: str, args):
                 "q_proj", "k_proj", "v_proj", "o_proj",
                 "gate_proj", "up_proj", "down_proj",
             ],
-            lora_alpha=lora_rank * 2,  # Official: lora_alpha = 2 * lora_rank
-            lora_dropout=0,
-            bias="none",
+            lora_alpha=lora_rank,  # Reference: lora_alpha = lora_rank
             use_gradient_checkpointing="unsloth",
+            random_state=3407,
         )
         print(f"  Loaded with Unsloth (BF16 + vLLM + LoRA r={lora_rank})")
     else:
@@ -748,27 +855,32 @@ def train_single_agent(role: str, args):
 
     from trl import GRPOConfig, GRPOTrainer
 
-    reward_fn = make_reward_function(role)
+    reward_fns = make_reward_functions(role)
 
+    max_prompt_length = 512
     grpo_config = GRPOConfig(
         output_dir=output_dir,
         max_steps=args.max_steps,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
-        num_generations=2,  # GRPO group size (official recommendation)
-        max_completion_length=256,
-        max_prompt_length=512,
-        learning_rate=5e-5,  # Official reference: 5e-5
-        temperature=1.0,  # Official reference: 1.0
+        num_generations=4,  # GRPO group size (reference: 4)
+        max_prompt_length=max_prompt_length,
+        max_completion_length=max_seq_length - max_prompt_length,
+        learning_rate=5e-6,  # Reference: 5e-6
+        weight_decay=0.1,  # Reference: 0.1
+        warmup_ratio=0.1,  # Reference: 0.1
+        lr_scheduler_type="cosine",  # Reference: cosine
+        optim="adamw_8bit",  # Reference: adamw_8bit
+        max_grad_norm=1.0,  # Reference: 1.0
         logging_steps=1,
-        save_steps=50,
+        save_steps=250,  # Reference: 250
         report_to="none",
     )
 
     trainer = GRPOTrainer(
         model=model,
-        processing_class=tokenizer,
-        reward_funcs=[reward_fn],
+        tokenizer=tokenizer,
+        reward_funcs=reward_fns,  # 4 separate reward functions (reference pattern)
         args=grpo_config,
         train_dataset=train_dataset,
     )
@@ -804,8 +916,8 @@ def main():
         help="Use Unsloth for BF16 + vLLM fast inference",
     )
     parser.add_argument(
-        "--max_steps", type=int, default=300,
-        help="Max training steps (official recommendation: 300)",
+        "--max_steps", type=int, default=500,
+        help="Max training steps (reference: 500)",
     )
     parser.add_argument(
         "--num_episodes", type=int, default=20,
