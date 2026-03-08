@@ -479,6 +479,7 @@ class SentinelOpsArena(MCPEnvironment):
                     action.parameters.get("invoice_id", ""),
                     action.parameters.get("amount", 0),
                     action.parameters.get("reason", ""),
+                    current_tick=self.tick,
                 )
                 if data.get("error") and "exceeds" in data["error"]:
                     result["policy_violation"] = True
@@ -530,7 +531,11 @@ class SentinelOpsArena(MCPEnvironment):
                     }
 
             elif action.action_type == "get_current_policy":
-                data = self.billing.get_current_policy()
+                policy_type = action.parameters.get("policy_type", "refund")
+                if policy_type == "sla":
+                    data = self.ticketing.get_sla_rules()
+                else:
+                    data = self.billing.get_current_policy()
                 result = {"success": True, "details": data}
 
             elif action.action_type == "respond":
