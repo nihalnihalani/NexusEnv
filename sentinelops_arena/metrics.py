@@ -626,6 +626,27 @@ def format_comparison_metrics_html(
             ),
             [f"SE attacks: {u['social_eng_total']} / {t['social_eng_total']}"],
         ),
+        _comparison_card(
+            "Oversight Accuracy",
+            _pct(u.get("oversight_accuracy", 0.0)),
+            _pct(t.get("oversight_accuracy", 0.0)),
+            _color_good_high(u.get("oversight_accuracy", 0.0)),
+            _color_good_high(t.get("oversight_accuracy", 0.0)),
+            _diff_indicator(u.get("oversight_accuracy", 0.0), t.get("oversight_accuracy", 0.0), lower_is_better=False),
+            [
+                f"Decisions: {u.get('total_oversight', 0)} / {t.get('total_oversight', 0)}",
+                f"Avg Expl Qual: {u.get('avg_explanation_quality', 0.0):.2f} / {t.get('avg_explanation_quality', 0.0):.2f}"
+            ],
+        ),
+        _comparison_card(
+            "Drift Adaptation",
+            _pct(u.get("drift_adaptation_rate", 0.0)),
+            _pct(t.get("drift_adaptation_rate", 0.0)),
+            _color_good_high(u.get("drift_adaptation_rate", 0.0)),
+            _color_good_high(t.get("drift_adaptation_rate", 0.0)),
+            _diff_indicator(u.get("drift_adaptation_rate", 0.0), t.get("drift_adaptation_rate", 0.0), lower_is_better=False),
+            [f"Detected: {u.get('drifts_detected', 0)} / {t.get('drifts_detected', 0)} of {u.get('drift_events', 0)}"],
+        ),
     ]
 
     return (
