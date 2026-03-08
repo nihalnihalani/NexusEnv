@@ -179,12 +179,20 @@ class RandomizedAttacker:
             **rate_cfg,
         }
 
+    # Valid target systems per attack type (not all systems support all attacks)
+    VALID_TARGETS = {
+        AttackType.SCHEMA_DRIFT: [TargetSystem.CRM],  # only CRM has apply_schema_drift
+        AttackType.POLICY_DRIFT: [TargetSystem.BILLING],  # only Billing has apply_policy_drift
+        AttackType.SOCIAL_ENGINEERING: [TargetSystem.CRM, TargetSystem.BILLING, TargetSystem.TICKETING],
+        AttackType.RATE_LIMIT: [TargetSystem.CRM, TargetSystem.BILLING, TargetSystem.TICKETING],
+    }
+
     def act(self, tick: int) -> SentinelAction:
         # Decide whether to attack this tick (probability-based + budget check)
         if self.budget >= self.COST_PER_ATTACK and self.rng.random() < self.ATTACK_PROBABILITY:
             self.budget -= self.COST_PER_ATTACK
             atype = self.rng.choice(list(AttackType))
-            target = self.rng.choice(list(TargetSystem))
+            target = self.rng.choice(self.VALID_TARGETS[atype])
             params = self._build_params(atype, target)
             return SentinelAction(
                 agent=AgentRole.ATTACKER,
