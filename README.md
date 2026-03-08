@@ -1,3 +1,14 @@
+---
+title: SentinelOps Arena
+emoji: "\U0001F6E1\uFE0F"
+colorFrom: green
+colorTo: red
+sdk: gradio
+sdk_version: 6.9.0
+app_file: app.py
+pinned: false
+---
+
 # SentinelOps Arena
 
 Multi-agent self-play RL environment for enterprise security training, built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv) for the [OpenEnv Hackathon SF](https://cerebralvalley.ai/e/openenv-hackathon-sf) (March 7-8, 2026).

@@ -3,79 +3,50 @@
 Multi-agent self-play RL environment for enterprise security training.
 Three AI agents (Attacker, Worker, Oversight) interact with simulated
 enterprise systems (CRM, Billing, Ticketing).
+
+Built with Gradio 6 -- custom cybersecurity theme, native plots, rich HTML.
 """
 
 import json
 
 import gradio as gr
+import pandas as pd
 
 from sentinelops_arena.demo import run_comparison, run_episode
 from sentinelops_arena.environment import SentinelOpsArena
 
+from sentinel_theme import SentinelTheme, CUSTOM_CSS, HEADER_HTML
+from replay_html import format_replay_html
+from chart_helpers import (
+    build_score_progression_df,
+    build_attack_timeline_df,
+    build_comparison_df,
+    build_verdict_html,
+)
+from inspector import (
+    get_all_customers,
+    get_all_invoices,
+    get_all_tickets,
+    get_task_queue,
+    get_env_config_html,
+)
 
-def format_replay_html(log, scores):
-    """Format replay log as styled HTML."""
-    colors = {
-        "attacker": "#ff4444",
-        "worker": "#4488ff",
-        "oversight": "#44bb44",
-    }
 
-    html = "<div style='font-family: monospace; font-size: 13px;'>"
-    html += "<h3>Episode Replay</h3>"
-
-    current_tick = -1
-    for entry in log:
-        if entry["tick"] != current_tick:
-            current_tick = entry["tick"]
-            html += f"<hr><b>--- Tick {current_tick} ---</b><br>"
-
-        agent = entry["agent"]
-        color = colors.get(agent, "#888")
-        reward = entry["reward"]
-        reward_str = f" (reward: {reward:.1f})" if reward else ""
-        flag_str = " [FLAGGED]" if entry.get("flag") else ""
-
-        html += (
-            f"<span style='color: {color}; font-weight: bold;'>"
-            f"[{entry['agent_label']}]</span> "
-        )
-        html += f"{entry['action_type']}{reward_str}{flag_str}"
-
-        details = entry.get("details", "")
-        if details:
-            html += (
-                f" -- <span style='color: #888;'>{str(details)[:120]}</span>"
-            )
-        explanation = entry.get("explanation", "")
-        if explanation:
-            html += (
-                f"<br><span style='color: #666; margin-left: 20px;'>"
-                f"  {explanation}</span>"
-            )
-        html += "<br>"
-
-    html += "<hr><h3>Final Scores</h3>"
-    for agent, score in scores.items():
-        color = colors.get(agent, "#888")
-        bar_width = max(0, min(score * 10, 300))
-        html += (
-            f"<span style='color: {color}; font-weight: bold;'>"
-            f"{agent}</span>: {score:.1f} "
-            f"<span style='display:inline-block; background:{color}; "
-            f"height:12px; width:{bar_width}px; opacity:0.5;'></span><br>"
-        )
-
-    html += "</div>"
-    return html
+# -------------------------------------------------------------------
+# Handler functions
+# -------------------------------------------------------------------
 
 
 def run_single_episode(seed, trained):
-    """Run a single episode and return formatted replay."""
+    """Run a single episode and return formatted replay + charts."""
     log, scores = run_episode(trained=bool(trained), seed=int(seed))
     html = format_replay_html(log, scores)
     scores_text = json.dumps(scores, indent=2)
-    return html, scores_text
+
+    score_df = build_score_progression_df(log)
+    attack_df = build_attack_timeline_df(log)
+
+    return html, scores_text, score_df, attack_df
 
 
 def run_before_after(seed):
@@ -89,7 +60,18 @@ def run_before_after(seed):
         result["trained"]["log"], result["trained"]["scores"]
     )
 
-    comparison = {
+    comparison_df = build_comparison_df(
+        result["untrained"]["scores"], result["trained"]["scores"]
+    )
+    verdict_html = build_verdict_html(
+        result["untrained"]["log"], result["trained"]["log"]
+    )
+
+    # Score progression for both
+    untrained_score_df = build_score_progression_df(result["untrained"]["log"])
+    trained_score_df = build_score_progression_df(result["trained"]["log"])
+
+    comparison_json = {
         "untrained_scores": result["untrained"]["scores"],
         "trained_scores": result["trained"]["scores"],
         "improvement": {
@@ -102,34 +84,29 @@ def run_before_after(seed):
         },
     }
 
-    return untrained_html, trained_html, json.dumps(comparison, indent=2)
+    return (
+        untrained_html,
+        trained_html,
+        verdict_html,
+        comparison_df,
+        untrained_score_df,
+        trained_score_df,
+        json.dumps(comparison_json, indent=2),
+    )
 
 
 def inspect_state(seed):
-    """Show environment state after reset."""
+    """Show full environment state after reset."""
     env = SentinelOpsArena()
-    obs = env.reset(seed=int(seed))
-    state = env.state
+    env.reset(seed=int(seed))
 
-    state_info = {
-        "episode_id": state.episode_id,
-        "tick": state.tick,
-        "max_ticks": env.MAX_TICKS,
-        "num_customers": env.NUM_CUSTOMERS,
-        "num_invoices": env.NUM_INVOICES,
-        "num_tickets": env.NUM_TICKETS,
-        "num_tasks": env.NUM_TASKS,
-        "scores": state.scores,
-    }
+    config_html = get_env_config_html(env)
+    customers_df = get_all_customers(env)
+    invoices_df = get_all_invoices(env)
+    tickets_df = get_all_tickets(env)
+    tasks_df = get_task_queue(env)
 
-    sample_customer = env.crm.lookup_customer("C000")
-    sample_task = env.tasks[0].model_dump() if env.tasks else {}
-
-    return (
-        json.dumps(state_info, indent=2),
-        json.dumps(sample_customer, indent=2),
-        json.dumps(sample_task, indent=2, default=str),
-    )
+    return config_html, customers_df, invoices_df, tickets_df, tasks_df
 
 
 # -------------------------------------------------------------------
@@ -137,26 +114,14 @@ def inspect_state(seed):
 # -------------------------------------------------------------------
 
 with gr.Blocks(title="SentinelOps Arena") as demo:
-    gr.Markdown(
-        """
-    # SentinelOps Arena
-    ## Multi-Agent Self-Play RL Environment for Enterprise Security
 
-    Three AI agents compete in a simulated enterprise environment:
-    - **RED TEAM (Attacker)**: Launches schema drift, policy drift,
-      social engineering, and rate limiting attacks
-    - **BLUE TEAM (Worker)**: Handles customer requests across CRM,
-      Billing, and Ticketing systems
-    - **AUDITOR (Oversight)**: Monitors worker actions and flags
-      policy violations
-
-    Built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv)
-    for the OpenEnv Hackathon SF 2026.
-    """
-    )
+    # Header banner
+    gr.HTML(HEADER_HTML)
 
     with gr.Tabs():
+        # ============================================================
         # Tab 1: Run Episode
+        # ============================================================
         with gr.TabItem("Run Episode"):
             with gr.Row():
                 seed_input = gr.Number(
@@ -167,19 +132,43 @@ with gr.Blocks(title="SentinelOps Arena") as demo:
                 )
                 run_btn = gr.Button("Run Episode", variant="primary")
 
-            replay_output = gr.HTML(label="Episode Replay")
-            scores_output = gr.Code(label="Final Scores", language="json")
+            with gr.Row():
+                with gr.Column(scale=2):
+                    replay_output = gr.HTML(label="Episode Replay")
+                with gr.Column(scale=1):
+                    scores_output = gr.Code(
+                        label="Final Scores", language="json"
+                    )
+
+            with gr.Accordion("Score Progression & Attack Timeline", open=True):
+                with gr.Row():
+                    score_plot = gr.LinePlot(
+                        x="tick",
+                        y="score",
+                        color="agent",
+                        label="Cumulative Score Progression",
+                        height=300,
+                    )
+                    attack_plot = gr.BarPlot(
+                        x="attack_type",
+                        y="count",
+                        color="attack_type",
+                        label="Attack Timeline",
+                        height=300,
+                    )
 
             run_btn.click(
                 run_single_episode,
                 inputs=[seed_input, trained_toggle],
-                outputs=[replay_output, scores_output],
+                outputs=[replay_output, scores_output, score_plot, attack_plot],
             )
 
+        # ============================================================
         # Tab 2: Before/After Comparison
+        # ============================================================
         with gr.TabItem("Untrained vs Trained"):
             gr.Markdown(
-                "Compare how an untrained worker vs a trained worker "
+                "Compare how an **untrained** worker vs a **trained** worker "
                 "handles the same attack sequence."
             )
             with gr.Row():
@@ -188,21 +177,58 @@ with gr.Blocks(title="SentinelOps Arena") as demo:
                 )
                 comp_btn = gr.Button("Run Comparison", variant="primary")
 
+            # Verdict stats
+            verdict_output = gr.HTML(label="Training Impact")
+
             with gr.Row():
                 untrained_output = gr.HTML(label="Untrained Worker")
                 trained_output = gr.HTML(label="Trained Worker")
 
+            with gr.Accordion("Score Comparison Charts", open=True):
+                comparison_bar = gr.BarPlot(
+                    x="agent",
+                    y="score",
+                    color="type",
+                    label="Score Comparison: Untrained vs Trained",
+                    height=300,
+                )
+                with gr.Row():
+                    untrained_score_plot = gr.LinePlot(
+                        x="tick",
+                        y="score",
+                        color="agent",
+                        label="Untrained Score Progression",
+                        height=250,
+                    )
+                    trained_score_plot = gr.LinePlot(
+                        x="tick",
+                        y="score",
+                        color="agent",
+                        label="Trained Score Progression",
+                        height=250,
+                    )
+
             comparison_output = gr.Code(
-                label="Score Comparison", language="json"
+                label="Score Details", language="json"
             )
 
             comp_btn.click(
                 run_before_after,
                 inputs=[comp_seed],
-                outputs=[untrained_output, trained_output, comparison_output],
+                outputs=[
+                    untrained_output,
+                    trained_output,
+                    verdict_output,
+                    comparison_bar,
+                    untrained_score_plot,
+                    trained_score_plot,
+                    comparison_output,
+                ],
             )
 
+        # ============================================================
         # Tab 3: Environment Inspector
+        # ============================================================
         with gr.TabItem("Environment Inspector"):
             with gr.Row():
                 inspect_seed = gr.Number(
@@ -210,23 +236,47 @@ with gr.Blocks(title="SentinelOps Arena") as demo:
                 )
                 inspect_btn = gr.Button("Inspect", variant="primary")
 
-            state_output = gr.Code(
-                label="Environment State", language="json"
-            )
-            customer_output = gr.Code(
-                label="Sample Customer (C000)", language="json"
-            )
-            task_output = gr.Code(
-                label="First Task (TASK-000)", language="json"
-            )
+            config_output = gr.HTML(label="Environment Configuration")
+
+            with gr.Accordion("Customers (CRM)", open=False):
+                customers_table = gr.Dataframe(
+                    label="All Customers",
+                    headers=["customer_id", "name", "tier", "region", "lifetime_value"],
+                )
+
+            with gr.Accordion("Invoices (Billing)", open=False):
+                invoices_table = gr.Dataframe(
+                    label="All Invoices",
+                    headers=["invoice_id", "customer_id", "amount", "status"],
+                )
+
+            with gr.Accordion("Tickets (Support)", open=False):
+                tickets_table = gr.Dataframe(
+                    label="All Tickets",
+                    headers=["ticket_id", "customer_id", "subject", "priority", "status", "sla_deadline_tick"],
+                )
+
+            with gr.Accordion("Task Queue", open=False):
+                tasks_table = gr.Dataframe(
+                    label="Task Queue",
+                    headers=["task_id", "customer_id", "task_type", "message", "arrival_tick"],
+                )
 
             inspect_btn.click(
                 inspect_state,
                 inputs=[inspect_seed],
-                outputs=[state_output, customer_output, task_output],
+                outputs=[
+                    config_output,
+                    customers_table,
+                    invoices_table,
+                    tickets_table,
+                    tasks_table,
+                ],
             )
 
+        # ============================================================
         # Tab 4: About
+        # ============================================================
         with gr.TabItem("About"):
             gr.Markdown(
                 """
@@ -234,7 +284,7 @@ with gr.Blocks(title="SentinelOps Arena") as demo:
 
             **3 Agents, 3 Systems, 30 Ticks per Episode**
 
-            Each tick: Attacker acts -> Worker acts -> Oversight acts
+            Each tick: Attacker acts &rarr; Worker acts &rarr; Oversight acts
 
             ### Attack Types
             1. **Schema Drift** -- Renames fields across all records.
@@ -264,4 +314,9 @@ with gr.Blocks(title="SentinelOps Arena") as demo:
             )
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860, theme=gr.themes.Soft())
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        theme=SentinelTheme(),
+        css=CUSTOM_CSS,
+    )
