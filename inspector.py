@@ -82,15 +82,15 @@ def get_env_config_html(env: SentinelOpsArena) -> str:
     sla = env.ticketing.sla_rules.model_dump()
 
     css = (
-        "font-family: 'Courier New', monospace;"
-        "background: #0d1117;"
-        "color: #c9d1d9;"
+        "font-family: 'IBM Plex Mono', monospace;"
+        "background: var(--sentinel-surface);"
+        "color: var(--sentinel-text);"
         "padding: 20px;"
-        "border-radius: 10px;"
-        "border: 1px solid #30363d;"
+        "border-radius: 8px;"
+        "border: 1px solid var(--sentinel-border);"
     )
     heading_css = (
-        "color: #39ff14;"
+        "color: var(--sentinel-green);"
         "font-size: 14px;"
         "font-weight: bold;"
         "margin: 16px 0 8px 0;"
@@ -105,17 +105,17 @@ def get_env_config_html(env: SentinelOpsArena) -> str:
     th_css = (
         "text-align: left;"
         "padding: 6px 12px;"
-        "border-bottom: 1px solid #30363d;"
-        "color: #58a6ff;"
+        "border-bottom: 1px solid var(--sentinel-border);"
+        "color: var(--sentinel-blue);"
         "font-size: 12px;"
     )
     td_css = (
         "padding: 6px 12px;"
-        "border-bottom: 1px solid #21262d;"
+        "border-bottom: 1px solid rgba(201, 209, 217, 0.1);"
         "font-size: 13px;"
     )
     val_css = (
-        "color: #39ff14;"
+        "color: var(--sentinel-green);"
         "font-weight: bold;"
     )
 

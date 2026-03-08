@@ -153,10 +153,21 @@ CUSTOM_CSS = """
     --sentinel-text: #c9d1d9;
 }
 
+footer {
+    display: none !important;
+}
+
 /* ====================== GLOBAL ====================== */
 .gradio-container {
     background: var(--sentinel-bg) !important;
-    max-width: 1200px !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+}
+
+.gradio-container > .main {
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 0 20px;
 }
 
 /* ====================== TAB HEADERS ====================== */

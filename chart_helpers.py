@@ -9,6 +9,72 @@ from __future__ import annotations
 import pandas as pd
 
 
+def format_comparison_scores_html(untrained: dict, trained: dict) -> str:
+    """Format comparative scores for untrained vs trained."""
+    colors = {
+        "attacker": "var(--sentinel-red)",
+        "worker": "var(--sentinel-blue)",
+        "oversight": "var(--sentinel-green)",
+    }
+    
+    html = "<div style='display:flex; flex-direction:column; gap:8px;'>"
+    for agent in untrained.keys():
+        color = colors.get(agent, "#888")
+        u_score = untrained[agent]
+        t_score = trained[agent]
+        diff = t_score - u_score
+        
+        diff_color = "#44bb44" if diff > 0 else ("#ff4444" if diff < 0 else "#888")
+        diff_sign = "+" if diff > 0 else ""
+        
+        html += (
+            f"<div style='display:flex; flex-direction:column; padding:12px 16px; "
+            f"background:var(--sentinel-surface); border:1px solid var(--sentinel-border); "
+            f"border-radius:6px; border-left:4px solid {color};'>"
+            f"<div style='font-family:\"IBM Plex Mono\", monospace; font-weight:bold; "
+            f"text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;'>{agent}</div>"
+            f"<div style='display:flex; justify-content:space-between; align-items:center;'>"
+            f"<div style='font-family:\"IBM Plex Mono\", monospace;'>"
+            f"<span style='color:#888; font-size:12px; margin-right:8px;'>UNTRAINED:</span>"
+            f"<span style='font-weight:bold;'>{u_score:.1f}</span>"
+            f"</div>"
+            f"<div style='font-family:\"IBM Plex Mono\", monospace;'>"
+            f"<span style='color:#888; font-size:12px; margin-right:8px;'>TRAINED:</span>"
+            f"<span style='font-weight:bold; color:{color};'>{t_score:.1f}</span>"
+            f"</div>"
+            f"<div style='font-family:\"IBM Plex Mono\", monospace; font-weight:bold; color:{diff_color};'>"
+            f"{diff_sign}{diff:.1f}"
+            f"</div>"
+            f"</div>"
+            f"</div>"
+        )
+    html += "</div>"
+    return html
+
+def format_scores_html(scores: dict) -> str:
+    """Format final scores as a styled HTML widget."""
+    colors = {
+        "attacker": "var(--sentinel-red)",
+        "worker": "var(--sentinel-blue)",
+        "oversight": "var(--sentinel-green)",
+    }
+    
+    html = "<div style='display:flex; flex-direction:column; gap:8px;'>"
+    for agent, score in scores.items():
+        color = colors.get(agent, "#888")
+        html += (
+            f"<div style='display:flex; justify-content:space-between; align-items:center; "
+            f"padding:12px 16px; background:var(--sentinel-surface); border:1px solid var(--sentinel-border); "
+            f"border-radius:6px; border-left:4px solid {color};'>"
+            f"<span style='font-family:\"IBM Plex Mono\", monospace; font-weight:bold; "
+            f"text-transform:uppercase; letter-spacing:1px;'>{agent}</span>"
+            f"<span style='font-family:\"IBM Plex Mono\", monospace; font-size:18px; "
+            f"font-weight:bold; color:{color};'>{score:.1f}</span>"
+            f"</div>"
+        )
+    html += "</div>"
+    return html
+
 def build_score_progression_df(log: list[dict]) -> pd.DataFrame:
     """Track cumulative scores for each agent at each tick.
 
@@ -122,29 +188,27 @@ def build_verdict_html(untrained_log: list, trained_log: list) -> str:
         diff_sign = "+" if diff > 0 else ""
         return (
             f"<div style='flex:1; text-align:center; padding:16px; "
-            f"background:#111827; border-radius:12px; margin:4px;'>"
-            f"<div style='font-size:12px; color:#888; text-transform:uppercase; "
+            f"background:var(--sentinel-surface); border-radius:8px; border:1px solid var(--sentinel-border); margin:4px;'>"
+            f"<div style='font-size:11px; color:var(--sentinel-text); text-transform:uppercase; "
             f"letter-spacing:1px;'>{label}</div>"
-            f"<div style='display:flex; justify-content:center; gap:24px; margin-top:8px;'>"
+            f"<div style='display:flex; justify-content:center; align-items:center; gap:24px; margin-top:12px;'>"
             f"<div>"
-            f"<div style='font-size:28px; font-weight:bold; color:#ff4444;'>{untrained_val}</div>"
-            f"<div style='font-size:10px; color:#888;'>Untrained</div>"
+            f"<div style='font-size:28px; font-weight:bold; color:var(--sentinel-red);'>{untrained_val}</div>"
+            f"<div style='font-size:10px; color:#888; text-transform:uppercase;'>Untrained</div>"
             f"</div>"
             f"<div>"
-            f"<div style='font-size:28px; font-weight:bold; color:#00ff41;'>{trained_val}</div>"
-            f"<div style='font-size:10px; color:#888;'>Trained</div>"
+            f"<div style='font-size:28px; font-weight:bold; color:var(--sentinel-green);'>{trained_val}</div>"
+            f"<div style='font-size:10px; color:#888; text-transform:uppercase;'>Trained</div>"
             f"</div>"
             f"</div>"
-            f"<div style='font-size:14px; color:{diff_color}; margin-top:6px; "
-            f"font-weight:bold;'>{diff_sign}{diff}</div>"
+            f"<div style='font-size:14px; color:{diff_color}; margin-top:12px; "
+            f"font-weight:bold;'>Difference: {diff_sign}{diff}</div>"
             f"</div>"
         )
 
     html = (
-        "<div style='font-family:system-ui,sans-serif; padding:12px;'>"
-        "<h3 style='text-align:center; color:#e0e0e0; margin-bottom:12px;'>"
-        "Training Impact Verdict</h3>"
-        "<div style='display:flex; gap:8px;'>"
+        "<div style='font-family:\"IBM Plex Mono\", monospace; padding:12px;'>"
+        "<div style='display:flex; gap:16px;'>"
     )
     html += _stat_card(
         "Attacks Launched",
