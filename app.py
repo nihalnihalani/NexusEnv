@@ -40,6 +40,15 @@ from inspector import (
     get_task_queue,
     get_env_config_html,
 )
+from training_charts import (
+    build_training_summary_html,
+    build_convergence_analysis_html,
+    build_reward_curve_df,
+    build_reward_components_df,
+    build_kl_divergence_df,
+    build_completion_length_df,
+    build_loss_df,
+)
 
 
 # -------------------------------------------------------------------
@@ -374,7 +383,80 @@ with gr.Blocks(title="SentinelOps Arena", fill_width=True) as demo:
             )
 
         # ============================================================
-        # Tab 4: About
+        # Tab 4: GRPO Training Results
+        # ============================================================
+        with gr.TabItem("GRPO Training"):
+            with gr.Row():
+                with gr.Column(scale=1, min_width=300):
+                    gr.Markdown("### Training Dashboard")
+                    training_summary = gr.HTML(
+                        value=build_training_summary_html,
+                        elem_classes=["glow-card"],
+                    )
+
+                    gr.Markdown("---")
+                    gr.Markdown("### Convergence Analysis")
+                    convergence_html = gr.HTML(
+                        value=build_convergence_analysis_html,
+                        elem_classes=["glow-card"],
+                    )
+
+                with gr.Column(scale=3):
+                    with gr.Tabs():
+                        with gr.TabItem("Reward Curve"):
+                            reward_curve_plot = gr.LinePlot(
+                                value=build_reward_curve_df,
+                                x="step",
+                                y="reward",
+                                title="Total Reward over Training Steps (max 11.0)",
+                                tooltip=["step", "reward"],
+                                height=400,
+                            )
+
+                        with gr.TabItem("Reward Components"):
+                            reward_components_plot = gr.LinePlot(
+                                value=build_reward_components_df,
+                                x="step",
+                                y="score",
+                                color="component",
+                                title="Individual Reward Components over Training",
+                                tooltip=["step", "score", "component"],
+                                height=400,
+                            )
+
+                        with gr.TabItem("KL Divergence"):
+                            kl_plot = gr.LinePlot(
+                                value=build_kl_divergence_df,
+                                x="step",
+                                y="kl",
+                                title="KL Divergence from Base Model",
+                                tooltip=["step", "kl"],
+                                height=400,
+                            )
+
+                        with gr.TabItem("Completion Length"):
+                            length_plot = gr.LinePlot(
+                                value=build_completion_length_df,
+                                x="step",
+                                y="tokens",
+                                color="metric",
+                                title="Output Length over Training (tokens)",
+                                tooltip=["step", "tokens", "metric"],
+                                height=400,
+                            )
+
+                        with gr.TabItem("Training Loss"):
+                            loss_plot = gr.LinePlot(
+                                value=build_loss_df,
+                                x="step",
+                                y="loss",
+                                title="Training Loss over Steps",
+                                tooltip=["step", "loss"],
+                                height=400,
+                            )
+
+        # ============================================================
+        # Tab 5: About
         # ============================================================
         with gr.TabItem("About"):
             gr.Markdown(
