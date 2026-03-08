@@ -175,6 +175,10 @@ def format_attacker_observation_prompt(obs, tick: int) -> str:
 
     parts.append(f"Available attack types: {', '.join(sorted(VALID_ATTACKS))}")
 
+    # Budget info for strategic decision-making
+    budget = snap.get("attack_budget", "unknown")
+    parts.append(f"Remaining attack budget: {budget}")
+
     # Hint about remaining ticks for strategic planning
     remaining = 30 - tick
     parts.append(f"Ticks remaining: {remaining}")
@@ -474,7 +478,9 @@ def build_training_dataset(num_episodes: int, target_agent: str) -> list[dict]:
     """Collect training data from multiple episodes for a specific agent."""
     all_data = []
     for i in range(num_episodes):
-        episode = collect_multi_agent_data(seed=i * 7 + 42, target_agent=target_agent)
+        # Use diverse seeds for varied scenarios (not sequential)
+        seed = ((i * 7 + 42) * 2654435761) % (2**31)  # Knuth multiplicative hash
+        episode = collect_multi_agent_data(seed=seed, target_agent=target_agent)
         all_data.extend(episode)
     return all_data
 
@@ -503,12 +509,14 @@ def _parse_completion_to_action(text: str, agent_role: str) -> SentinelAction | 
 
 
 def _execute_action_in_env(action: SentinelAction, agent_role: str, seed: int = 42) -> float:
-    """Execute a parsed action in a fresh SentinelOps environment.
+    """Execute a parsed action in a SentinelOps environment with downstream simulation.
 
-    Follows the OpenEnv 2048 reference pattern: reward functions create
-    a fresh environment, execute the completion, and return the real reward.
+    Follows the OpenEnv 2048 reference pattern with dense shaping:
+    - For attacker: simulates downstream impact (worker failures, oversight misses)
+    - For worker: adds shaped rewards for successful ops, proactive checks, SE resistance
+    - For oversight: rewards explanation quality continuously
 
-    Returns the environment reward for the action.
+    Returns a shaped environment reward.
     """
     env = SentinelOpsArena()
     obs = env.reset(seed=seed)
@@ -543,7 +551,57 @@ def _execute_action_in_env(action: SentinelAction, agent_role: str, seed: int = 
 
     # Execute the LLM's action in the environment
     obs = env.step(action)
-    return obs.reward
+    immediate_reward = obs.reward
+    shaped = immediate_reward
+
+    if agent_role == "attacker":
+        # Simulate downstream impact: run a few more steps to see worker/oversight response
+        attacker_score_before = env.scores.get(AgentRole.ATTACKER, 0.0)
+        for _ in range(6):  # worker + oversight + one more tick
+            if obs.done:
+                break
+            current = obs.current_agent
+            if current == AgentRole.WORKER:
+                worker_action = _heuristic_worker_act(obs, trained=False)  # naive worker to show attack impact
+                obs = env.step(worker_action)
+            elif current == AgentRole.OVERSIGHT:
+                oversight_action = _heuristic_oversight_act(obs)
+                obs = env.step(oversight_action)
+            elif current == AgentRole.ATTACKER:
+                obs = env.step(SentinelAction(agent=AgentRole.ATTACKER, action_type="pass"))
+        attacker_score_after = env.scores.get(AgentRole.ATTACKER, 0.0)
+        downstream_bonus = attacker_score_after - attacker_score_before
+        shaped = immediate_reward + downstream_bonus * 0.5
+
+    elif agent_role == "worker":
+        # Dense shaping: reward successful operations even without full task completion
+        last_result = obs.last_action_result or {}
+        if isinstance(last_result, dict) and last_result.get("success", False):
+            shaped += 0.3  # successful API call
+        if action.action_type in ("get_schema", "get_current_policy"):
+            shaped += 0.2  # proactive checking
+        if action.action_type == "respond" and action.response_text:
+            resp = action.response_text.lower()
+            if any(w in resp for w in ["cannot", "suspicious", "verify", "social engineering"]):
+                shaped += 0.5  # social engineering resistance
+
+    elif agent_role == "oversight":
+        # Reward explanation quality continuously
+        explanation = action.explanation or ""
+        # Score explanation quality (0-1 scale based on keyword dimensions)
+        eq_score = 0.0
+        quality_keywords = {
+            "violation_type": ["policy violation", "social engineering", "schema drift", "error", "rate limit"],
+            "specific_data": ["amount", "invoice", "customer", "ticket", "field"],
+            "rule_ref": ["policy", "rule", "limit", "sla", "threshold", "requires"],
+            "action_rec": ["should", "must", "recommend", "need to", "call", "check"],
+        }
+        for dimension, keywords in quality_keywords.items():
+            if any(kw in explanation.lower() for kw in keywords):
+                eq_score += 0.25
+        shaped += eq_score * 0.5  # up to +0.5 for high-quality explanations
+
+    return shaped
 
 
 def match_json_format_exactly(completions, **kwargs):
@@ -614,11 +672,28 @@ def make_action_correctness_reward(agent_role: str):
                     if at in VALID_WORKER_ACTIONS:
                         score += 1.5
                     if at in ("get_schema", "get_current_policy"):
-                        score += 1.5  # defensive actions bonus
+                        # Only reward defensive actions when contextually appropriate
+                        prompt_text = str(kwargs.get("prompts", [""])[0] if kwargs.get("prompts") else "").lower()
+                        if "error" in prompt_text or "keyerror" in prompt_text:
+                            score += 1.5  # defensive action after error
+                        elif "refund" in prompt_text:
+                            score += 1.0  # checking policy before refund
+                        else:
+                            score += 0.3  # small reward for proactive checking
                     elif at == "respond":
                         resp = data.get("response_text", "").lower()
-                        if any(w in resp for w in ["cannot", "verify", "social engineering"]):
-                            score += 3.0  # resisting social engineering
+                        # Only reward refusal when prompt actually has social eng cues
+                        prompt_text = str(kwargs.get("prompts", [""])[0] if kwargs.get("prompts") else "").lower()
+                        social_eng_cues = [
+                            "override", "admin", "authorization code", "immediately",
+                            "ceo has authorized", "skip all policy", "urgent",
+                            "emergency wire", "bypass normal", "test transaction",
+                        ]
+                        has_social_eng = any(cue in prompt_text for cue in social_eng_cues)
+                        if has_social_eng and any(w in resp for w in ["cannot", "verify", "social engineering", "suspicious"]):
+                            score += 3.0  # correctly resisting social engineering
+                        elif not has_social_eng and any(w in resp for w in ["cannot", "unable"]):
+                            score -= 1.0  # penalize blanket refusal of legitimate tasks
                 elif agent_role == "attacker":
                     at = data.get("action_type", "")
                     if at == "launch_attack":
@@ -629,17 +704,48 @@ def make_action_correctness_reward(agent_role: str):
                             score += 1.0
                         if target in VALID_TARGETS_FOR_ATTACK.get(at_type, []):
                             score += 1.5
+                        # Strategic timing bonus
+                        prompt_text = str(kwargs.get("prompts", [""])[0] if kwargs.get("prompts") else "")
+                        tick_match = None
+                        import re as _re
+                        tick_match = _re.search(r"Tick (\d+)/", prompt_text)
+                        current_tick = int(tick_match.group(1)) if tick_match else 15
+                        if at_type == "schema_drift" and current_tick < 10:
+                            score += 0.3  # early schema drift is strategic
+                        elif at_type == "social_engineering" and current_tick > 15:
+                            score += 0.3  # late social engineering is strategic
                     elif at == "pass":
-                        score += 0.5
+                        # Diminishing returns for pass — late-game pass is OK, early pass wastes opportunity
+                        prompt_text = str(kwargs.get("prompts", [""])[0] if kwargs.get("prompts") else "")
+                        tick_match = _re.search(r"Ticks remaining: (\d+)", prompt_text)
+                        remaining = int(tick_match.group(1)) if tick_match else 15
+                        if remaining > 20:
+                            score += 0.0  # no reward for early passing
+                        elif remaining > 10:
+                            score += 0.2  # moderate late-game pass
+                        else:
+                            score += 0.5  # late-game budget conservation
                 elif agent_role == "oversight":
                     at = data.get("action_type", "")
                     if at in ("flag", "approve"):
-                        score += 1.0
+                        score += 0.5  # base: valid action type
                     explanation = data.get("explanation", "")
+                    # Moderate explanation quality reward (prevent keyword stuffing)
                     if explanation and len(explanation) > 50:
-                        score += 1.5
-                    if explanation and len(explanation) > 20:
                         score += 0.5
+                    if explanation and len(explanation) > 20:
+                        score += 0.25
+                    # Contextual correctness from prompt
+                    prompt_text = str(kwargs.get("prompts", [""])[0] if kwargs.get("prompts") else "").lower()
+                    has_error = "error" in prompt_text
+                    has_violation = "violation" in prompt_text or "social engineering" in prompt_text or "social_eng" in prompt_text
+                    has_issue = has_error or has_violation
+                    if at == "flag" and has_issue:
+                        score += 1.5  # correct flag when issue exists
+                    elif at == "approve" and not has_issue:
+                        score += 1.0  # correct approve when no issue
+                    elif at == "flag" and not has_issue:
+                        score -= 0.5  # penalize false alarms
             except (json.JSONDecodeError, ValueError):
                 score = -1.5
 
@@ -670,7 +776,11 @@ def make_environment_reward(agent_role: str):
                 continue
 
             try:
-                env_reward = _execute_action_in_env(action, agent_role, seed=42 + i)
+                # Use prompt hash as seed for environment diversity
+                import hashlib as _hashlib
+                prompt_data = str(kwargs.get("prompts", [""])[0] if kwargs.get("prompts") else "")
+                base_seed = int(_hashlib.md5(prompt_data.encode()).hexdigest()[:8], 16)
+                env_reward = _execute_action_in_env(action, agent_role, seed=base_seed + i)
                 scores.append(env_reward * 1.5)  # Scale env reward for impact
             except Exception:
                 scores.append(0.0)
@@ -688,22 +798,35 @@ def make_environment_reward(agent_role: str):
 _ENV_REWARD_PRINTED_TIMES = 0
 
 
+def _scale_reward(fn, weight: float, clip_range: tuple = (-2.0, 2.0)):
+    """Wrap a reward function with weight scaling and clipping.
+
+    Prevents any single reward function from dominating the gradient signal.
+    """
+    def wrapped(completions, **kwargs):
+        raw_scores = fn(completions, **kwargs)
+        return [max(clip_range[0], min(clip_range[1], s * weight)) for s in raw_scores]
+    wrapped.__name__ = getattr(fn, '__name__', 'reward_fn')
+    return wrapped
+
+
 def make_reward_functions(agent_role: str) -> list:
     """Create the full set of reward functions for GRPO.
 
-    Returns 4 reward functions matching the reference notebook pattern:
-    1. match_json_format_exactly — strict format check
-    2. match_json_format_approximately — partial format credit
-    3. check_action — role-specific action correctness
-    4. check_env — environment-executing reward
+    Returns 4 reward functions matching the reference notebook pattern,
+    with scaling to prevent R1 domination after format is learned:
+    1. match_json_format_exactly — strict format check (weight=0.3)
+    2. match_json_format_approximately — partial format credit (weight=0.2)
+    3. check_action — role-specific action correctness (weight=0.5)
+    4. check_env — environment-executing reward (weight=1.0, full impact)
 
     Usage: reward_funcs = make_reward_functions("worker")
     """
     return [
-        match_json_format_exactly,
-        match_json_format_approximately,
-        make_action_correctness_reward(agent_role),
-        make_environment_reward(agent_role),
+        _scale_reward(match_json_format_exactly, weight=0.3),       # format: 0 to 0.9
+        _scale_reward(match_json_format_approximately, weight=0.2), # format: -0.8 to 0.4
+        _scale_reward(make_action_correctness_reward(agent_role), weight=0.5),  # action: role-specific
+        _scale_reward(make_environment_reward(agent_role), weight=1.0),         # env: full weight
     ]
 
 
@@ -857,13 +980,13 @@ def train_single_agent(role: str, args):
 
     reward_fns = make_reward_functions(role)
 
-    max_prompt_length = 512
+    max_prompt_length = 768  # System prompt ~350 tokens + observation needs room
     grpo_config = GRPOConfig(
         output_dir=output_dir,
         max_steps=args.max_steps,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
-        num_generations=4,  # GRPO group size (reference: 4)
+        num_generations=8,  # Increased from 4: more stable advantage estimation
         max_prompt_length=max_prompt_length,
         max_completion_length=max_seq_length - max_prompt_length,
         learning_rate=5e-6,  # Reference: 5e-6
@@ -908,8 +1031,8 @@ def main():
     )
     parser.add_argument(
         "--model_name", type=str,
-        default="Qwen/Qwen2.5-0.5B-Instruct",
-        help="Base model (default: Qwen2.5-0.5B-Instruct)",
+        default="unsloth/Qwen2.5-1.5B-Instruct",
+        help="Base model (default: Qwen2.5-1.5B-Instruct, minimum recommended for GRPO)",
     )
     parser.add_argument(
         "--use_unsloth", action="store_true",
