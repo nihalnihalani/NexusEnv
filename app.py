@@ -121,7 +121,7 @@ def inspect_state(seed):
 # Gradio UI
 # -------------------------------------------------------------------
 
-with gr.Blocks(title="SentinelOps Arena", fill_width=True) as demo:
+with gr.Blocks(title="SentinelOps Arena", fill_width=True, theme=SentinelTheme(), css=CUSTOM_CSS) as demo:
 
     # Header banner
     gr.HTML(HEADER_HTML)
